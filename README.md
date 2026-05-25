@@ -19,7 +19,7 @@ The poller uses `tinytuya` against the heater's LAN IP and writes telemetry to I
 
 ## Run Manually
 
-Poll continuously with the default non-persistent Tuya socket:
+Poll continuously with the default 30 second telemetry interval and fault merge sampler:
 
 ```powershell
 python .\raypak_poller.py
@@ -50,13 +50,13 @@ Or pass them explicitly for a one-off run:
 python .\raypak_poller.py --weather-latitude 12.3456 --weather-longitude -12.3456
 ```
 
-Opt into a persistent Tuya socket:
+Disable fast fault sampling for a one-off diagnostic run:
 
 ```powershell
-python .\raypak_poller.py --persistent
+python .\raypak_poller.py --fault-sample-seconds 0
 ```
 
-Default is non-persistent. Use `--persistent` only when polling often enough to keep the Tuya socket healthy, or after adding heartbeat logic.
+Fault sampling is generic for all fault codes. If a full telemetry poll does not see a fault, the poller tries up to 5 extra fault bitmap reads 2 seconds apart before writing the full telemetry point. If a fault appears, those fault fields are merged into the full telemetry record; no sparse fault-only points are written. E3 is one example: it is `fault1_raw` bit 2, so the raw value is `4`. Persistent sockets are not enabled automatically because this heater can return partial DPS responses on long-lived sockets.
 
 ## Windows Scheduled Task
 
@@ -72,7 +72,9 @@ Default install mode:
 - Principal: `SYSTEM`
 - Trigger: system startup
 - Poll interval: `30` seconds
-- Persistent socket: off
+- Fault sample interval: `2` seconds
+- Fault sample attempts: `5`
+- Persistent socket: off by default
 - Log file: `C:\development\home\tuya\logs\raypak-poller.log`
 
 Install as current user at logon instead of `SYSTEM` at boot:
@@ -91,6 +93,12 @@ Install with a custom interval:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\development\home\tuya\install-raypak-task.ps1 -IntervalSeconds 10
+```
+
+Install with a custom fault sample interval:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\development\home\tuya\install-raypak-task.ps1 -FaultSampleSeconds 2 -FaultSampleAttempts 3
 ```
 
 ## Useful Commands
@@ -142,5 +150,6 @@ Unregister-ScheduledTask -TaskName "Raypak Poller" -Confirm:$false
 - Import `RaypakHeatPump.json` into Grafana to create the dashboard for the InfluxDB telemetry.
 - Weather coordinates are optional. Store `RAYPAK_WEATHER_LATITUDE` and `RAYPAK_WEATHER_LONGITUDE` in ignored local config, not tracked files.
 - The poller filters `-22` sentinel values for heater ambient/outpipe/exhaust readings.
-- If logs show only a few fields instead of the full telemetry set, prefer non-persistent mode at a 30 second interval.
+- Do not run another local Tuya client at the same time; the heater only accepts one local socket.
+- If logs show only a few fields instead of the full telemetry set, disable fault sampling with `--fault-sample-seconds 0` for comparison.
 - The `RequestsDependencyWarning` from `requests` is harmless for this poller. The scheduled runner suppresses Python warnings to keep logs readable.

@@ -3,6 +3,8 @@ param(
     [switch]$Persistent,
     [switch]$CurrentUser,
     [double]$IntervalSeconds = 30,
+    [double]$FaultSampleSeconds = 2,
+    [int]$FaultSampleAttempts = 5,
     [Nullable[double]]$WeatherLatitude,
     [Nullable[double]]$WeatherLongitude
 )
@@ -31,7 +33,11 @@ $runnerArgs = @(
     "-File",
     "`"$Runner`"",
     "-IntervalSeconds",
-    $IntervalSeconds
+    $IntervalSeconds,
+    "-FaultSampleSeconds",
+    $FaultSampleSeconds,
+    "-FaultSampleAttempts",
+    $FaultSampleAttempts
 )
 
 if ($Persistent) {

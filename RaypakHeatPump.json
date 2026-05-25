@@ -109,21 +109,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "green",
-                  "text": "No Fault"
-                },
-                "1": {
-                  "color": "red",
-                  "text": "Fault"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "displayName": "${__field.labels.fault_code}",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -160,7 +146,7 @@
           "values": false
         },
         "showPercentChange": false,
-        "textMode": "auto",
+        "textMode": "name",
         "wideLayout": true
       },
       "pluginVersion": "11.4.0",
@@ -170,7 +156,7 @@
             "type": "influxdb",
             "uid": "efn38cqkeercwa"
           },
-          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"fault_active\")\r\n  |> last()\r\n  |> map(fn: (r) => ({ r with _value: if r._value then 1 else 0 }))",
+          "query": "base = from(bucket: \"heater\")\r\n  |> range(start: -10m)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"fault_codes\")\r\n\r\nfallback = base\r\n  |> last()\r\n  |> map(fn: (r) => ({ r with _value: \"No Fault\", priority: 0 }))\r\n\r\nfaults = base\r\n  |> filter(fn: (r) => r._value != \"\")\r\n  |> last()\r\n  |> map(fn: (r) => ({ r with priority: 1 }))\r\n\r\nunion(tables: [fallback, faults])\r\n  |> group(columns: [])\r\n  |> sort(columns: [\"priority\"])\r\n  |> last()\r\n  |> map(fn: (r) => ({ r with fault_code: r._value, _value: if r._value == \"No Fault\" then 0 else 1 }))\r\n  |> group(columns: [\"fault_code\"])\r\n  |> keep(columns: [\"_time\", \"_value\", \"fault_code\"])",
           "refId": "A"
         }
       ],
@@ -622,162 +608,6 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 5,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "unit": "fahrenheit"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "id": 8,
-      "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "efn38cqkeercwa"
-          },
-          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"water_in_f\" or r._field == \"setpoint_f\")\r\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\r\n  |> map(fn: (r) => ({ r with _field: if r._field == \"water_in_f\" then \"Water In F\" else \"Setpoint F\" }))\r\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
-          "refId": "A"
-        }
-      ],
-      "title": "Temperature Detail",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "efn38cqkeercwa"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 70,
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0
-          },
-          "mappings": [
-            {
-              "options": {
-                "false": {
-                  "text": "Off"
-                },
-                "true": {
-                  "text": "On"
-                }
-              },
-              "type": "value"
-            }
-          ]
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 14
-      },
-      "id": 9,
-      "options": {
-        "alignValue": "left",
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "mergeValues": true,
-        "rowHeight": 0.9,
-        "labelWidth": 0,
-        "showValue": "never",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "efn38cqkeercwa"
-          },
-          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"power\" or r._field == \"comp_relay\" or r._field == \"pump_relay\" or r._field == \"defrost\")",
-          "refId": "A"
-        }
-      ],
-      "title": "Run State",
-      "type": "state-timeline"
-    },
-    {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "efn38cqkeercwa"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
             "fillOpacity": 10,
             "gradientMode": "none",
             "hideFrom": {
@@ -858,7 +688,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 14
       },
       "id": 10,
       "options": {
@@ -917,7 +747,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 22
       },
       "id": 11,
       "options": {
@@ -972,7 +802,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 29
+        "y": 22
       },
       "id": 12,
       "options": {

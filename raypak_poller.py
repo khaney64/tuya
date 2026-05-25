@@ -21,6 +21,8 @@ import tinytuya
 
 
 POLL_INTERVAL_SECONDS = 30
+FAULT_SAMPLE_SECONDS = 2.0
+FAULT_SAMPLE_ATTEMPTS = 5
 WEATHER_REFRESH_SECONDS = 300
 MEASUREMENT = "pool_heater"
 DEVICE_FILE = "devices.json"
@@ -104,6 +106,8 @@ FAULT1_LABELS = [
 ]
 
 FAULT2_LABELS = ["F8", "F9", "FB", "FA"]
+FAULT_FIELD_NAMES = ("fault1_raw", "fault2_raw", "fault_active", "fault_codes")
+MIN_FULL_TELEMETRY_FIELDS = 10
 
 
 @dataclass(frozen=True)
@@ -400,15 +404,71 @@ def write_influx_line(config: InfluxConfig, line: str) -> None:
         raise InfluxWriteError(f"InfluxDB HTTP {exc.code}: {detail}") from exc
 
 
-def poll_heater(heater: tinytuya.Device) -> dict[str, Any]:
+def read_heater_dps(heater: tinytuya.Device) -> dict[str, Any]:
     raw = heater.status()
     dps = raw.get("dps") if isinstance(raw, dict) else None
     if not isinstance(dps, dict):
         raise ValueError(f"unexpected tinytuya response: {raw!r}")
-    return map_dps_fields(dps)
+    return dps
+
+
+def poll_heater(heater: tinytuya.Device) -> dict[str, Any]:
+    return map_dps_fields(read_heater_dps(heater))
+
+
+def poll_fault_fields(heater: tinytuya.Device) -> dict[str, Any]:
+    fields = map_dps_fields(read_heater_dps(heater))
+    return {name: fields[name] for name in FAULT_FIELD_NAMES if name in fields}
+
+
+def is_full_telemetry(fields: dict[str, Any]) -> bool:
+    return "water_in_f" in fields and "setpoint_f" in fields and len(fields) >= MIN_FULL_TELEMETRY_FIELDS
+
+
+def write_fields(
+    args: argparse.Namespace,
+    influx_config: InfluxConfig,
+    fields: dict[str, Any],
+    kind: str,
+) -> None:
+    line = format_point(args.measurement, HEATER_TAGS, fields)
+    if not line:
+        log(f"{kind}_skipped reason=no_fields")
+    elif args.dry_run:
+        log(f"dry_run kind={kind} line={line}")
+    else:
+        write_influx_line(influx_config, line)
+        log(f"write_ok kind={kind} fields={len(fields)}")
+
+
+def merge_fault_sample(
+    heater: tinytuya.Device,
+    fields: dict[str, Any],
+    sample_seconds: float,
+    sample_attempts: int,
+) -> None:
+    if fields.get("fault_active") or sample_seconds <= 0 or sample_attempts <= 0:
+        return
+
+    for attempt in range(1, sample_attempts + 1):
+        time.sleep(sample_seconds)
+        fault_fields = poll_fault_fields(heater)
+        if fault_fields.get("fault_active"):
+            fields.update(fault_fields)
+            log(f"fault_sample_captured attempt={attempt} fault_codes={fault_fields.get('fault_codes')}")
+            return
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.interval_seconds <= 0:
+        raise ValueError("--interval-seconds must be greater than 0")
+    if args.fault_sample_seconds < 0:
+        raise ValueError("--fault-sample-seconds must be 0 or greater")
+    if 0 < args.fault_sample_seconds < 1:
+        raise ValueError("--fault-sample-seconds must be at least 1 second")
+    if args.fault_sample_attempts < 0:
+        raise ValueError("--fault-sample-attempts must be 0 or greater")
+
     base_dir = Path(__file__).resolve().parent
     device_file = Path(args.device_file)
     if not device_file.is_absolute():
@@ -421,7 +481,8 @@ def run(args: argparse.Namespace) -> int:
     device_config = load_device_config(device_file)
     influx_config = load_influx_config(env_file)
     weather_location = resolve_weather_location(args)
-    heater = create_heater(device_config, persistent=args.persistent)
+    effective_persistent = args.persistent
+    heater = create_heater(device_config, persistent=effective_persistent)
 
     weather_temp_f: float | None = None
     last_weather_fetch = 0.0
@@ -429,7 +490,9 @@ def run(args: argparse.Namespace) -> int:
     log(
         "starting poller "
         f"device_ip={device_config.address} interval={args.interval_seconds}s "
-        f"persistent={str(args.persistent).lower()} "
+        f"fault_sample={args.fault_sample_seconds}s "
+        f"fault_attempts={args.fault_sample_attempts} "
+        f"persistent={str(effective_persistent).lower()} "
         f"weather_enabled={str(weather_location is not None).lower()}"
     )
 
@@ -446,21 +509,28 @@ def run(args: argparse.Namespace) -> int:
 
         try:
             fields = poll_heater(heater)
+            if not is_full_telemetry(fields):
+                log(f"poll_skipped reason=partial_telemetry fields={len(fields)}")
+                if args.once:
+                    return 0
+                elapsed = time.monotonic() - started
+                time.sleep(max(0.0, args.interval_seconds - elapsed))
+                continue
+
+            merge_fault_sample(
+                heater,
+                fields,
+                args.fault_sample_seconds,
+                args.fault_sample_attempts,
+            )
             if weather_temp_f is not None:
                 fields["weather_temp_f"] = weather_temp_f
 
-            line = format_point(args.measurement, HEATER_TAGS, fields)
-            if not line:
-                log("poll_skipped reason=no_fields")
-            elif args.dry_run:
-                log(f"dry_run line={line}")
-            else:
-                write_influx_line(influx_config, line)
-                log(f"write_ok fields={len(fields)}")
+            write_fields(args, influx_config, fields, "telemetry")
         except Exception as exc:
-            log(f"poll_or_write_failed error={exc}")
+            log(f"poll_or_write_failed kind=telemetry error={exc}")
             try:
-                heater = create_heater(device_config, persistent=args.persistent)
+                heater = create_heater(device_config, persistent=effective_persistent)
                 log("heater_reconnected")
             except Exception as reconnect_exc:
                 log(f"heater_reconnect_failed error={reconnect_exc}")
@@ -475,6 +545,8 @@ def run(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval-seconds", type=float, default=POLL_INTERVAL_SECONDS)
+    parser.add_argument("--fault-sample-seconds", type=float, default=FAULT_SAMPLE_SECONDS)
+    parser.add_argument("--fault-sample-attempts", type=int, default=FAULT_SAMPLE_ATTEMPTS)
     parser.add_argument("--weather-refresh-seconds", type=float, default=WEATHER_REFRESH_SECONDS)
     parser.add_argument("--weather-latitude", type=float, default=None)
     parser.add_argument("--weather-longitude", type=float, default=None)
