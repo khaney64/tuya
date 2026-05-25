@@ -1,0 +1,34 @@
+# Local secrets and environment files
+.env
+.env.*
+influxdb-env*.ps1
+
+# Tuya wizard output and device credentials
+devices.json
+tuya-raw.json
+snapshot.json
+tinytuya.json
+
+# Editor and backup files
+*~
+*.un~
+*.swp
+*.swo
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments and build output
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Runtime logs
+*.log
+logs/
