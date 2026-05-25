@@ -1,7 +1,9 @@
 param(
     [switch]$Persistent,
     [switch]$Once,
-    [double]$IntervalSeconds = 30
+    [double]$IntervalSeconds = 30,
+    [Nullable[double]]$WeatherLatitude,
+    [Nullable[double]]$WeatherLongitude
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +32,15 @@ if ($Once) {
     $pollerArgs += "--once"
 }
 
-"$(Get-Date -Format o) launching raypak poller persistent=$($Persistent.IsPresent) once=$($Once.IsPresent) interval=${IntervalSeconds}s" | Add-Content -Path $LogFile
+if ($WeatherLatitude.HasValue) {
+    $pollerArgs += @("--weather-latitude", $WeatherLatitude.Value)
+}
+
+if ($WeatherLongitude.HasValue) {
+    $pollerArgs += @("--weather-longitude", $WeatherLongitude.Value)
+}
+
+"$(Get-Date -Format o) launching raypak poller persistent=$($Persistent.IsPresent) once=$($Once.IsPresent) interval=${IntervalSeconds}s weather_args=$($WeatherLatitude.HasValue -or $WeatherLongitude.HasValue)" | Add-Content -Path $LogFile
 $ErrorActionPreference = "Continue"
 & $Python @pollerArgs *>> $LogFile
 exit $LASTEXITCODE

@@ -12,6 +12,7 @@ The poller uses `tinytuya` against the heater's LAN IP and writes telemetry to I
 | `run-raypak-poller.ps1` | Windows runner used by Task Scheduler. Writes logs to `logs\raypak-poller.log`. |
 | `install-raypak-task.ps1` | Installs and starts the Windows Scheduled Task. Defaults to `SYSTEM` at boot. |
 | `influxdb-env.ps1` | Local InfluxDB configuration. Secret file; ignored by git. |
+| `RaypakHeatPump.json` | Grafana dashboard JSON for visualizing the InfluxDB telemetry written by the poller. |
 | `devices.json` | Tuya device metadata including `local_key`. Secret file; ignored by git. |
 | `tinytuya.json`, `tuya-raw.json`, `snapshot.json` | `tinytuya wizard` output. Secret/local setup files; ignored by git. |
 | `AGENTS.md` | Project context, DPS map, architecture notes, and next steps. |
@@ -34,6 +35,19 @@ Print line protocol instead of writing to InfluxDB:
 
 ```powershell
 python .\raypak_poller.py --once --dry-run
+```
+
+Weather data is disabled unless a location is configured. Keep coordinates in ignored local config:
+
+```powershell
+$env:RAYPAK_WEATHER_LATITUDE = "12.3456"
+$env:RAYPAK_WEATHER_LONGITUDE = "-12.3456"
+```
+
+Or pass them explicitly for a one-off run:
+
+```powershell
+python .\raypak_poller.py --weather-latitude 12.3456 --weather-longitude -12.3456
 ```
 
 Opt into a persistent Tuya socket:
@@ -125,6 +139,8 @@ Unregister-ScheduledTask -TaskName "Raypak Poller" -Confirm:$false
 
 - The heater is controlled locally over Tuya LAN protocol, not Tuya cloud.
 - `devices.json` contains the Tuya `local_key`. Do not commit it.
+- Import `RaypakHeatPump.json` into Grafana to create the dashboard for the InfluxDB telemetry.
+- Weather coordinates are optional. Store `RAYPAK_WEATHER_LATITUDE` and `RAYPAK_WEATHER_LONGITUDE` in ignored local config, not tracked files.
 - The poller filters `-22` sentinel values for heater ambient/outpipe/exhaust readings.
 - If logs show only a few fields instead of the full telemetry set, prefer non-persistent mode at a 30 second interval.
 - The `RequestsDependencyWarning` from `requests` is harmless for this poller. The scheduled runner suppresses Python warnings to keep logs readable.

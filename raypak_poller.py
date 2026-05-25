@@ -22,9 +22,6 @@ import tinytuya
 
 POLL_INTERVAL_SECONDS = 30
 WEATHER_REFRESH_SECONDS = 300
-ZIP_CODE = "19335"
-WEATHER_LATITUDE = 40.0065
-WEATHER_LONGITUDE = -75.7033
 MEASUREMENT = "pool_heater"
 DEVICE_FILE = "devices.json"
 DEFAULT_ENV_FILE = "influxdb-env.ps1"
@@ -196,6 +193,34 @@ def load_influx_config(env_file: Path | None) -> InfluxConfig:
         bucket=str(values["bucket"]),
         token=str(values["token"]),
     )
+
+
+def env_float(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+
+
+def resolve_weather_location(args: argparse.Namespace) -> tuple[float, float] | None:
+    latitude = args.weather_latitude
+    longitude = args.weather_longitude
+
+    if latitude is None:
+        latitude = env_float("RAYPAK_WEATHER_LATITUDE")
+    if longitude is None:
+        longitude = env_float("RAYPAK_WEATHER_LONGITUDE")
+
+    if latitude is None and longitude is None:
+        return None
+    if latitude is None or longitude is None:
+        raise ValueError("weather location requires both latitude and longitude")
+
+    return float(latitude), float(longitude)
 
 
 def create_heater(config: DeviceConfig, persistent: bool = False) -> tinytuya.Device:
@@ -395,6 +420,7 @@ def run(args: argparse.Namespace) -> int:
 
     device_config = load_device_config(device_file)
     influx_config = load_influx_config(env_file)
+    weather_location = resolve_weather_location(args)
     heater = create_heater(device_config, persistent=args.persistent)
 
     weather_temp_f: float | None = None
@@ -404,18 +430,19 @@ def run(args: argparse.Namespace) -> int:
         "starting poller "
         f"device_ip={device_config.address} interval={args.interval_seconds}s "
         f"persistent={str(args.persistent).lower()} "
-        f"weather_zip={ZIP_CODE}"
+        f"weather_enabled={str(weather_location is not None).lower()}"
     )
 
     while True:
         started = time.monotonic()
 
-        try:
-            if started - last_weather_fetch >= args.weather_refresh_seconds or weather_temp_f is None:
-                weather_temp_f = fetch_weather_temp_f(args.weather_latitude, args.weather_longitude)
-                last_weather_fetch = started
-        except Exception as exc:
-            log(f"weather_fetch_failed error={exc}")
+        if weather_location is not None:
+            try:
+                if started - last_weather_fetch >= args.weather_refresh_seconds or weather_temp_f is None:
+                    weather_temp_f = fetch_weather_temp_f(*weather_location)
+                    last_weather_fetch = started
+            except Exception as exc:
+                log(f"weather_fetch_failed error={exc}")
 
         try:
             fields = poll_heater(heater)
@@ -449,8 +476,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval-seconds", type=float, default=POLL_INTERVAL_SECONDS)
     parser.add_argument("--weather-refresh-seconds", type=float, default=WEATHER_REFRESH_SECONDS)
-    parser.add_argument("--weather-latitude", type=float, default=WEATHER_LATITUDE)
-    parser.add_argument("--weather-longitude", type=float, default=WEATHER_LONGITUDE)
+    parser.add_argument("--weather-latitude", type=float, default=None)
+    parser.add_argument("--weather-longitude", type=float, default=None)
     parser.add_argument("--measurement", default=MEASUREMENT)
     parser.add_argument("--device-file", default=DEVICE_FILE)
     parser.add_argument("--env-file", default=None)

@@ -2,7 +2,9 @@ param(
     [string]$TaskName = "Raypak Poller",
     [switch]$Persistent,
     [switch]$CurrentUser,
-    [double]$IntervalSeconds = 30
+    [double]$IntervalSeconds = 30,
+    [Nullable[double]]$WeatherLatitude,
+    [Nullable[double]]$WeatherLongitude
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +36,14 @@ $runnerArgs = @(
 
 if ($Persistent) {
     $runnerArgs += "-Persistent"
+}
+
+if ($WeatherLatitude.HasValue) {
+    $runnerArgs += @("-WeatherLatitude", $WeatherLatitude.Value)
+}
+
+if ($WeatherLongitude.HasValue) {
+    $runnerArgs += @("-WeatherLongitude", $WeatherLongitude.Value)
 }
 
 $action = New-ScheduledTaskAction `
