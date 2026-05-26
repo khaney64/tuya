@@ -8,7 +8,7 @@ The poller uses `tinytuya` against the heater's LAN IP and writes telemetry to I
 
 | Path | Purpose |
 | --- | --- |
-| `raypak_poller.py` | Main poller. Reads Tuya DPS, normalizes fields, writes InfluxDB line protocol. |
+| `raypak_poller.py` | Main poller. Reads Tuya DPS, normalizes fields, computes derived thermal metrics, writes InfluxDB line protocol. |
 | `run-raypak-poller.ps1` | Windows runner used by Task Scheduler. Writes logs to `logs\raypak-poller.log`. |
 | `install-raypak-task.ps1` | Installs and starts the Windows Scheduled Task. Defaults to `SYSTEM` at boot. |
 | `influxdb-env.ps1` | Local InfluxDB configuration. Secret file; ignored by git. |
@@ -57,6 +57,29 @@ python .\raypak_poller.py --fault-sample-seconds 0
 ```
 
 Fault sampling is generic for all fault codes. If a full telemetry poll does not see a fault, the poller tries up to 5 extra fault bitmap reads 2 seconds apart before writing the full telemetry point. If a fault appears, those fault fields are merged into the full telemetry record; no sparse fault-only points are written. E3 is one example: it is `fault1_raw` bit 2, so the raw value is `4`. Persistent sockets are not enabled automatically because this heater can return partial DPS responses on long-lived sockets.
+
+## Derived Metrics
+
+The poller writes derived dashboard fields once per minute by default. Defaults assume a 15x30 oval pool filled to 46 inches:
+
+```powershell
+$env:RAYPAK_POOL_GALLONS = "10100"
+$env:RAYPAK_KWH_PRICE = "0.15828"
+$env:RAYPAK_PUMP_WATT_THRESHOLD = "50"
+```
+
+By default, ETA and cost use the heater's reported `setpoint_f`. Set `RAYPAK_TARGET_TEMP_F` only when you want an override target that differs from the heater setpoint.
+
+If the iotaWatt data is in a different InfluxDB datasource or requires a different token than the heater bucket, add:
+
+```powershell
+$env:IOTAWATT_INFLUXDB_URL = "http://..."
+$env:IOTAWATT_INFLUXDB_ORG = "..."
+$env:IOTAWATT_INFLUXDB_TOKEN = "..."
+$env:IOTAWATT_INFLUXDB_BUCKET = "iotawatt"
+```
+
+Derived fields include `available_capacity_btu_hr`, `capacity_vs_rated_pct`, `eta_seconds`, `cost_to_target_usd`, `observed_btu_hr`, `observed_cop`, `pool_reading_valid`, and `mode_sanity`.
 
 ## Windows Scheduled Task
 
