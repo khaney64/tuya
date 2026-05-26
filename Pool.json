@@ -1,0 +1,1290 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 0,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _today)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" \r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Cost today",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 3,
+        "y": 0
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start , stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * 24.0 * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Cost past 7 days",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 6,
+        "y": 0
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_lastmonth = date.truncate(t:date.add(d: -1mo, to: today()), unit:1mo)\r\n_thismonth = date.truncate(t:today(), unit:1mo)\r\n_first = if date.monthDay(t: today()) <= 22 then date.add(d: 21d, to: _lastmonth) else date.add(d: 21d, to: _thismonth)\r\n_last = now()\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _first, stop: _last)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" \r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])\r\n",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Current Billing Cycle",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0.01,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 9,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _today )\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" and r._value > 0.01\r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Cost By Hour",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0.01,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "kwatth"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 16,
+        "y": 0
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _today )\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" and r._value > 0.01\r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with kwh: (r._value / 1000.0) }))\r\n  |> keep(columns: [\"_time\", \"kwh\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater kWh By Hour",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 0,
+        "y": 6
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _today)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" \r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Cost today",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 3,
+        "y": 6
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_start = date.add(d: -7d, to: v.timeRangeStart)\r\n_stop = date.add(d: 7d, to: _start)\r\n_start1 = date.truncate(t: today(), unit:1d)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start , stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * 24.0 * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Cost past 7 days",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 6,
+        "y": 6
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^cost$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_lastmonth = date.truncate(t:date.add(d: -1mo, to: today()), unit:1mo)\r\n_thismonth = date.truncate(t:today(), unit:1mo)\r\n_first = if date.monthDay(t: today()) <= 22 then date.add(d: 21d, to: _lastmonth) else date.add(d: 21d, to: _thismonth)\r\n_last = now()\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _first, stop: _last)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" \r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n//  |> map(fn: (r) => ({ r with kwh: (r._value / 1000.0) }))\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])\r\n",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Current Billing Cycle",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "min": 0.01,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 9,
+        "y": 6
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: today())\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" and r._value > 0.01\r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Cost By Hour",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0.01,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "kwatth"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 16,
+        "y": 6
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _today )\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" and r._value > 0.01\r\n  )\r\n  |> aggregateWindow(every: 1h, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with kwh: (r._value / 1000.0) }))\r\n  |> keep(columns: [\"_time\", \"kwh\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump kWh By Hour",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 4,
+          "mappings": [],
+          "min": 0.5,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 0.66
+              },
+              {
+                "color": "yellow",
+                "value": 0.67
+              },
+              {
+                "color": "green",
+                "value": 0.68
+              }
+            ]
+          },
+          "unit": "kvoltamp"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 9,
+        "x": 0,
+        "y": 12
+      },
+      "id": 8,
+      "links": [
+        {
+          "targetBlank": true,
+          "title": "alert",
+          "url": "http://localhost:3000/alerting/grafana/JOB9AKk4k/view"
+        }
+      ],
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "from(bucket: \"iotawatt\")\r\n  |> range(start: -1h)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pf_pump\" \r\n  )\r\n",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Power Factor",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 5,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 9,
+        "y": 12
+      },
+      "id": 9,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.47,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start , stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with cost: (r._value / 1000.0) * 24.0 * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Cost last week",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 16,
+        "y": 12
+      },
+      "id": 10,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.44,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start, stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n//  |> map(fn: (r) => ({ r with kwh: ((r._value / 1000.0) * 24.0) }))\r\n  |> map(fn: (r) => ({ r with cost: ((r._value / 1000.0) * 24.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"cost\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Cost last week",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 20,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "kwatth"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 9,
+        "y": 18
+      },
+      "id": 15,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.47,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start , stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pool_heater\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with kwh: (r._value / 1000.0) * 24.0 }))\r\n  |> keep(columns: [\"_time\", \"kwh\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Heater Usage last week",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "kA0zmMz4z"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 20,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "kwatth"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 7,
+        "x": 16,
+        "y": 18
+      },
+      "id": 16,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.44,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "kA0zmMz4z"
+          },
+          "query": "import  \"date\"\r\nimport \"timezone\"\r\n\r\noption location = timezone.location(name: \"America/New_York\")\r\n\r\n_today = date.truncate(t: today(), unit:1d)\r\n_start = date.add(d: -7d, to: _today)\r\n_stop = date.add(d: 7d, to: _start)\r\n\r\nfrom(bucket: \"iotawatt\")\r\n  |> range(start: _start, stop: _stop)\r\n  |> filter(fn: (r) =>\r\n    r._measurement == \"pump\" \r\n  )\r\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: true)\r\n  |> map(fn: (r) => ({ r with kwh: ((r._value / 1000.0) * 24.0) }))\r\n//  |> map(fn: (r) => ({ r with cost: ((r._value / 1000.0) * 24.0) * ${kWhPrice} }))\r\n  |> keep(columns: [\"_time\", \"kwh\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pump Usage last week",
+      "type": "barchart"
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "0.15828",
+          "value": "0.15828"
+        },
+        "description": "Kilowatt Hour price",
+        "hide": 2,
+        "name": "kWhPrice",
+        "query": "0.15828",
+        "skipUrlSync": true,
+        "type": "constant"
+      }
+    ]
+  },
+  "time": {
+    "from": "now/d",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "timezone": "America/New_York",
+  "title": "Pool",
+  "uid": "cyQDtKkVz",
+  "version": 23,
+  "weekStart": ""
+}
