@@ -79,7 +79,7 @@ $env:IOTAWATT_INFLUXDB_TOKEN = "..."
 $env:IOTAWATT_INFLUXDB_BUCKET = "iotawatt"
 ```
 
-Derived fields include `available_capacity_btu_hr`, `capacity_vs_rated_pct`, `eta_seconds`, `cost_to_target_usd`, `observed_btu_hr`, `observed_cop`, `pool_reading_valid`, and `mode_sanity`.
+Derived fields include `available_capacity_btu_hr`, `capacity_vs_rated_pct`, `eta_seconds`, `cost_to_target_usd`, `observed_btu_hr`, `observed_cop`, `pool_reading_valid`, and `mode_sanity`. When circulation is off, the poller still writes state fields with idle sentinels: `pool_reading_valid=false`, `eta_seconds=-3`, `cost_to_target_usd=-3`, and `mode_sanity=4`.
 
 ## Windows Scheduled Task
 

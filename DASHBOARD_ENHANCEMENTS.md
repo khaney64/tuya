@@ -644,7 +644,10 @@ Row 4 (new, y=19, h=6):
 Row 5 (existing, y=25, h=8):
   Compressor and Fan Load
 
-Row 6 (existing, y=33, h=7):
+Row 6 (new, y=33, h=7):
+  Observed COP History
+
+Row 7 (existing, y=40, h=7):
   Fault History | Latest Telemetry
 ```
 

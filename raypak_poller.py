@@ -713,7 +713,8 @@ def compute_derived_fields(
     pump_valid = bool(fields.get("pump_relay")) or (
         pump_watts is not None and pump_watts >= config.pump_watt_threshold
     )
-    reading_valid = pump_valid or active_load(fields)
+    reading_valid = pump_valid
+    load_active = active_load(fields)
 
     derived: dict[str, Any] = {
         "target_temp_f": config.target_temp_f,
@@ -721,7 +722,7 @@ def compute_derived_fields(
         "pump_watts": pump_watts,
         "heater_watts": heater_watts,
         "pool_reading_valid": reading_valid,
-        "active_load": active_load(fields),
+        "active_load": load_active,
     }
 
     if water_f is None or ambient_f is None:
@@ -744,11 +745,19 @@ def compute_derived_fields(
     derived["available_capacity_btu_hr"] = gross_btu
     derived["capacity_vs_rated_pct"] = (gross_btu / 57650.0) * 100.0
     derived["observed_btu_hr"] = observed_btu
-    if observed_btu is not None and heater_watts is not None and heater_watts >= config.heater_watt_threshold:
-        derived["observed_cop"] = abs(observed_btu) / ((heater_watts / 1000.0) * 3412.0)
+    if (
+        reading_valid
+        and load_active
+        and observed_btu is not None
+        and heater_watts is not None
+        and heater_watts >= config.heater_watt_threshold
+    ):
+        observed_cop = abs(observed_btu) / ((heater_watts / 1000.0) * 3412.0)
+        if 0.5 <= observed_cop <= 8.0:
+            derived["observed_cop"] = observed_cop
 
     if not reading_valid:
-        derived.update({"eta_seconds": -2.0, "cost_to_target_usd": -2.0, "mode_sanity": 2, "mode_sanity_text": "Invalid reading"})
+        derived.update({"eta_seconds": -3.0, "cost_to_target_usd": -3.0, "mode_sanity": 4, "mode_sanity_text": "Idle"})
         return derived
     if not needs_heating and not needs_cooling:
         derived.update({"eta_seconds": 0.0, "cost_to_target_usd": 0.0, "mode_sanity": 0, "mode_sanity_text": "At target"})
@@ -767,8 +776,10 @@ def compute_derived_fields(
     derived["eta_seconds"] = eta_seconds
     derived["mode_sanity"] = 0
     derived["mode_sanity_text"] = "OK"
-    if heater_watts is not None and heater_watts > 0.0:
+    if heater_watts is not None and heater_watts >= config.heater_watt_threshold:
         derived["cost_to_target_usd"] = (eta_seconds / 3600.0) * (heater_watts / 1000.0) * config.kwh_price
+    else:
+        derived["cost_to_target_usd"] = -3.0
     return derived
 
 

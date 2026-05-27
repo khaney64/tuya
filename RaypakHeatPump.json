@@ -716,7 +716,7 @@
       "fieldConfig": {
         "defaults": {
           "decimals": 2,
-          "max": 7,
+          "max": 8,
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -768,12 +768,12 @@
             "type": "influxdb",
             "uid": "efn38cqkeercwa"
           },
-          "query": "from(bucket: \"heater\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r._measurement == \"pool_heater\" and r._field == \"observed_cop\")\n  |> last()",
+          "query": "from(bucket: \"heater\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r._measurement == \"pool_heater\" and r._field == \"observed_cop\")\n  |> filter(fn: (r) => r._value >= 0.5 and r._value <= 8.0)\n  |> last()",
           "refId": "A"
         }
       ],
       "title": "Observed COP",
-      "type": "stat"
+      "type": "gauge"
     },
     {
       "datasource": {
@@ -785,6 +785,10 @@
           "mappings": [
             {
               "options": {
+                "-3": {
+                  "color": "blue",
+                  "text": "Idle"
+                },
                 "-2": {
                   "color": "red",
                   "text": "No data"
@@ -853,6 +857,10 @@
           "mappings": [
             {
               "options": {
+                "-3": {
+                  "color": "blue",
+                  "text": "Idle"
+                },
                 "-2": {
                   "color": "red",
                   "text": "No data"
@@ -935,6 +943,10 @@
                 "3": {
                   "color": "red",
                   "text": "Cannot reach"
+                },
+                "4": {
+                  "color": "blue",
+                  "text": "Idle"
                 }
               },
               "type": "value"
@@ -954,6 +966,10 @@
               {
                 "color": "red",
                 "value": 2
+              },
+              {
+                "color": "blue",
+                "value": 4
               }
             ]
           }
@@ -1261,6 +1277,110 @@
           "color": {
             "mode": "thresholds"
           },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "COP",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "points",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 7,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "decimals": 2,
+          "max": 8,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "green",
+                "value": 4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efn38cqkeercwa"
+          },
+          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\" and r._field == \"observed_cop\")\r\n  |> filter(fn: (r) => r._value >= 0.5 and r._value <= 8.0)\r\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Observed COP History",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efn38cqkeercwa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -1277,7 +1397,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 27
+        "y": 34
       },
       "id": 11,
       "options": {
@@ -1332,7 +1452,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 34
       },
       "id": 12,
       "options": {

@@ -19,6 +19,7 @@ $Poller = Join-Path $ProjectRoot "raypak_poller.py"
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 Set-Location $ProjectRoot
 $env:PYTHONWARNINGS = "ignore"
+$env:PYTHONIOENCODING = "utf-8"
 
 $pollerArgs = @(
     $Poller,
@@ -46,7 +47,9 @@ if ($WeatherLongitude.HasValue) {
     $pollerArgs += @("--weather-longitude", $WeatherLongitude.Value)
 }
 
-"$(Get-Date -Format o) launching raypak poller persistent=$($Persistent.IsPresent) once=$($Once.IsPresent) interval=${IntervalSeconds}s fault_sample=${FaultSampleSeconds}s fault_attempts=${FaultSampleAttempts} weather_args=$($WeatherLatitude.HasValue -or $WeatherLongitude.HasValue)" | Add-Content -Path $LogFile
+"$(Get-Date -Format o) launching raypak poller persistent=$($Persistent.IsPresent) once=$($Once.IsPresent) interval=${IntervalSeconds}s fault_sample=${FaultSampleSeconds}s fault_attempts=${FaultSampleAttempts} weather_args=$($WeatherLatitude.HasValue -or $WeatherLongitude.HasValue)" | Add-Content -Path $LogFile -Encoding UTF8
 $ErrorActionPreference = "Continue"
-& $Python @pollerArgs *>> $LogFile
+& $Python @pollerArgs 2>&1 | ForEach-Object {
+    $_ | Add-Content -Path $LogFile -Encoding UTF8
+}
 exit $LASTEXITCODE
