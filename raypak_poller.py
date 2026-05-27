@@ -559,6 +559,61 @@ def query_measurement_mean(
     return None
 
 
+def parse_influx_time(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+
+
+def query_observed_btu_per_hr(
+    config: InfluxConfig,
+    bucket: str,
+    measurement: str,
+    pool_gallons: float,
+) -> float | None:
+    flux_query = "\n".join(
+        [
+            f"from(bucket: {flux_string(bucket)})",
+            "  |> range(start: -3h)",
+            f"  |> filter(fn: (r) => r._measurement == {flux_string(measurement)})",
+            '  |> filter(fn: (r) => r._field == "water_in_f")',
+            "  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)",
+        ]
+    )
+    rows = []
+    for row in query_influx_csv(config, flux_query):
+        try:
+            timestamp = parse_influx_time(row.get("_time"))
+            value = float(row.get("_value", ""))
+        except ValueError:
+            continue
+        if timestamp is not None and math.isfinite(value):
+            rows.append((timestamp, value))
+
+    if len(rows) < 2:
+        return None
+
+    latest_time, latest_temp = rows[-1]
+    earliest_time, earliest_temp = rows[0]
+    for sample_time, sample_temp in rows:
+        if latest_time - sample_time <= OBSERVED_WINDOW_SECONDS:
+            earliest_time, earliest_temp = sample_time, sample_temp
+            break
+
+    elapsed = latest_time - earliest_time
+    if elapsed < OBSERVED_MIN_WINDOW_SECONDS:
+        return None
+
+    delta_f = latest_temp - earliest_temp
+    if abs(delta_f) < 1.0:
+        return None
+    return (delta_f / elapsed) * 3600.0 * pool_gallons * 8.33
+
+
 def read_heater_dps(heater: tinytuya.Device) -> dict[str, Any]:
     raw = heater.status()
     dps = raw.get("dps") if isinstance(raw, dict) else None
@@ -643,44 +698,12 @@ def net_capacity_btu(
     return max(0.0, gross_btu * (1.0 - (factor * delta_scale)))
 
 
-def append_water_sample(
-    samples: list[tuple[float, float]],
-    now: float,
-    water_f: float | None,
-    valid: bool,
-) -> None:
-    if water_f is not None and valid:
-        samples.append((now, water_f))
-    cutoff = now - (OBSERVED_WINDOW_SECONDS * 2.0)
-    del samples[: len([sample for sample in samples if sample[0] < cutoff])]
-
-
-def observed_btu_per_hr(
-    samples: list[tuple[float, float]],
-    pool_gallons: float,
-) -> float | None:
-    if len(samples) < 2:
-        return None
-    latest_time, latest_temp = samples[-1]
-    earliest_time, earliest_temp = samples[0]
-    for sample_time, sample_temp in samples:
-        if latest_time - sample_time <= OBSERVED_WINDOW_SECONDS:
-            earliest_time, earliest_temp = sample_time, sample_temp
-            break
-    elapsed = latest_time - earliest_time
-    if elapsed < OBSERVED_MIN_WINDOW_SECONDS:
-        return None
-    delta_f = latest_temp - earliest_temp
-    return (delta_f / elapsed) * 3600.0 * pool_gallons * 8.33
-
-
 def compute_derived_fields(
     fields: dict[str, Any],
     config: DerivedConfig,
-    now: float,
-    water_samples: list[tuple[float, float]],
     heater_watts: float | None,
     pump_watts: float | None,
+    observed_btu: float | None,
 ) -> dict[str, Any]:
     water_f = numeric_field(fields, "water_in_f")
     weather_f = numeric_field(fields, "weather_temp_f")
@@ -691,7 +714,6 @@ def compute_derived_fields(
         pump_watts is not None and pump_watts >= config.pump_watt_threshold
     )
     reading_valid = pump_valid or active_load(fields)
-    append_water_sample(water_samples, now, water_f, reading_valid)
 
     derived: dict[str, Any] = {
         "target_temp_f": config.target_temp_f,
@@ -718,7 +740,6 @@ def compute_derived_fields(
     needs_cooling = water_f > target_f
     mode_mismatch = (mode == "warm" and needs_cooling) or (mode == "cool" and needs_heating)
     gross_btu = expected_capacity_btu(ambient_f, mode, needs_cooling)
-    observed_btu = observed_btu_per_hr(water_samples, config.pool_gallons)
 
     derived["available_capacity_btu_hr"] = gross_btu
     derived["capacity_vs_rated_pct"] = (gross_btu / 57650.0) * 100.0
@@ -815,7 +836,6 @@ def run(args: argparse.Namespace) -> int:
     weather_temp_f: float | None = None
     last_weather_fetch = 0.0
     last_derived_write = 0.0
-    water_samples: list[tuple[float, float]] = []
 
     log(
         "starting poller "
@@ -862,6 +882,7 @@ def run(args: argparse.Namespace) -> int:
             if started - last_derived_write >= derived_config.interval_seconds or args.once:
                 heater_watts: float | None = None
                 pump_watts: float | None = None
+                observed_btu: float | None = None
                 try:
                     heater_watts = query_measurement_mean(
                         iotawatt_influx_config,
@@ -875,16 +896,21 @@ def run(args: argparse.Namespace) -> int:
                         "pump",
                         "-10m",
                     )
+                    observed_btu = query_observed_btu_per_hr(
+                        influx_config,
+                        influx_config.bucket,
+                        args.measurement,
+                        derived_config.pool_gallons,
+                    )
                 except Exception as exc:
-                    log(f"derived_power_query_failed error={exc}")
+                    log(f"derived_history_query_failed error={exc}")
 
                 derived_fields = compute_derived_fields(
                     fields,
                     derived_config,
-                    started,
-                    water_samples,
                     heater_watts,
                     pump_watts,
+                    observed_btu,
                 )
                 write_fields(args, influx_config, derived_fields, "derived")
                 last_derived_write = started
