@@ -35,8 +35,11 @@ KWH_PRICE = 0.15828
 PUMP_WATT_THRESHOLD = 50.0
 HEATER_WATT_THRESHOLD = 200.0
 DERIVED_INTERVAL_SECONDS = 60.0
-OBSERVED_WINDOW_SECONDS = 3600.0
-OBSERVED_MIN_WINDOW_SECONDS = 1800.0
+OBSERVED_WINDOW_SECONDS = 3 * 3600.0
+OBSERVED_MIN_WINDOW_SECONDS = 2 * 3600.0
+OBSERVED_MIN_TEMP_DELTA_F = 2.0
+OBSERVED_MAX_COP = 8.0
+OBSERVED_CAPACITY_FACTOR = 1.25
 IOTAWATT_BUCKET = "iotawatt"
 
 HEATER_TAGS = {
@@ -569,49 +572,116 @@ def parse_influx_time(value: str | None) -> float | None:
         return None
 
 
-def query_observed_btu_per_hr(
+def linear_regression_slope(points: list[tuple[float, float]]) -> float | None:
+    if len(points) < 2:
+        return None
+    origin = points[0][0]
+    xs = [timestamp - origin for timestamp, _ in points]
+    ys = [value for _, value in points]
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator == 0:
+        return None
+    return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
+
+
+def summarize_numeric_window(
+    rows: list[dict[str, str]],
+    field: str,
+    start_time: float,
+) -> tuple[float | None, float | None, float | None]:
+    values: list[float] = []
+    for row in rows:
+        if row.get("_field") != field:
+            continue
+        timestamp = parse_influx_time(row.get("_time"))
+        if timestamp is None or timestamp < start_time:
+            continue
+        try:
+            value = float(row.get("_value", ""))
+        except ValueError:
+            continue
+        if math.isfinite(value):
+            values.append(value)
+    if not values:
+        return None, None, None
+    return min(values), max(values), sum(values) / len(values)
+
+
+def query_observed_metrics(
     config: InfluxConfig,
     bucket: str,
     measurement: str,
     pool_gallons: float,
-) -> float | None:
+    mode: str,
+) -> tuple[float | None, str]:
     flux_query = "\n".join(
         [
             f"from(bucket: {flux_string(bucket)})",
             "  |> range(start: -3h)",
             f"  |> filter(fn: (r) => r._measurement == {flux_string(measurement)})",
-            '  |> filter(fn: (r) => r._field == "water_in_f")',
-            "  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)",
+            '  |> filter(fn: (r) => r._field == "water_in_f" or r._field == "speed_pct" or r._field == "pool_reading_valid" or r._field == "active_load")',
+            "  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)",
         ]
     )
-    rows = []
-    for row in query_influx_csv(config, flux_query):
+    raw_rows = query_influx_csv(config, flux_query)
+    water_rows: list[tuple[float, float]] = []
+    valid_rows: list[tuple[float, bool]] = []
+    for row in raw_rows:
+        timestamp = parse_influx_time(row.get("_time"))
+        if timestamp is None:
+            continue
+        if row.get("_field") == "pool_reading_valid" or row.get("_field") == "active_load":
+            valid_rows.append((timestamp, str(row.get("_value")).lower() == "true"))
+            continue
+        if row.get("_field") != "water_in_f":
+            continue
         try:
-            timestamp = parse_influx_time(row.get("_time"))
             value = float(row.get("_value", ""))
         except ValueError:
             continue
-        if timestamp is not None and math.isfinite(value):
-            rows.append((timestamp, value))
+        if math.isfinite(value):
+            water_rows.append((timestamp, value))
 
-    if len(rows) < 2:
-        return None
+    if len(water_rows) < 2:
+        return None, "No data"
 
-    latest_time, latest_temp = rows[-1]
-    earliest_time, earliest_temp = rows[0]
-    for sample_time, sample_temp in rows:
-        if latest_time - sample_time <= OBSERVED_WINDOW_SECONDS:
-            earliest_time, earliest_temp = sample_time, sample_temp
-            break
+    latest_time = water_rows[-1][0]
+    start_time = latest_time - OBSERVED_WINDOW_SECONDS
+    window = [(timestamp, value) for timestamp, value in water_rows if timestamp >= start_time]
+    if len(window) < 2:
+        return None, "No data"
 
-    elapsed = latest_time - earliest_time
+    elapsed = window[-1][0] - window[0][0]
     if elapsed < OBSERVED_MIN_WINDOW_SECONDS:
-        return None
+        return None, "Warmup"
 
-    delta_f = latest_temp - earliest_temp
-    if abs(delta_f) < 1.0:
-        return None
-    return (delta_f / elapsed) * 3600.0 * pool_gallons * 8.33
+    delta_f = window[-1][1] - window[0][1]
+    if abs(delta_f) < OBSERVED_MIN_TEMP_DELTA_F:
+        return None, "Low resolution"
+
+    valid_window = [value for timestamp, value in valid_rows if timestamp >= start_time]
+    if valid_window and not all(valid_window):
+        return None, "Idle"
+
+    speed_min, speed_max, _ = summarize_numeric_window(raw_rows, "speed_pct", start_time)
+    if speed_min is None or speed_min < 95.0:
+        return None, "Not full load"
+    if speed_max is not None and speed_max - speed_min > 10.0:
+        return None, "Unstable load"
+
+    slope_f_per_second = linear_regression_slope(window)
+    if slope_f_per_second is None:
+        return None, "No trend"
+
+    if mode == "warm" and slope_f_per_second <= 0:
+        return None, "Wrong direction"
+    if mode == "cool" and slope_f_per_second >= 0:
+        return None, "Wrong direction"
+
+    observed_btu = slope_f_per_second * 3600.0 * pool_gallons * 8.33
+    return observed_btu, "OK"
 
 
 def read_heater_dps(heater: tinytuya.Device) -> dict[str, Any]:
@@ -704,6 +774,7 @@ def compute_derived_fields(
     heater_watts: float | None,
     pump_watts: float | None,
     observed_btu: float | None,
+    observed_status: str,
 ) -> dict[str, Any]:
     water_f = numeric_field(fields, "water_in_f")
     weather_f = numeric_field(fields, "weather_temp_f")
@@ -723,6 +794,7 @@ def compute_derived_fields(
         "heater_watts": heater_watts,
         "pool_reading_valid": reading_valid,
         "active_load": load_active,
+        "observed_cop_status": observed_status,
     }
 
     if water_f is None or ambient_f is None:
@@ -744,7 +816,11 @@ def compute_derived_fields(
 
     derived["available_capacity_btu_hr"] = gross_btu
     derived["capacity_vs_rated_pct"] = (gross_btu / 57650.0) * 100.0
-    derived["observed_btu_hr"] = observed_btu
+    if observed_btu is not None and abs(observed_btu) > gross_btu * OBSERVED_CAPACITY_FACTOR:
+        observed_btu = None
+        derived["observed_cop_status"] = "Implausible"
+
+    derived["observed_btu_hr"] = observed_btu if observed_btu is not None else -3.0
     if (
         reading_valid
         and load_active
@@ -753,8 +829,14 @@ def compute_derived_fields(
         and heater_watts >= config.heater_watt_threshold
     ):
         observed_cop = abs(observed_btu) / ((heater_watts / 1000.0) * 3412.0)
-        if 0.5 <= observed_cop <= 8.0:
+        if 0.5 <= observed_cop <= OBSERVED_MAX_COP:
             derived["observed_cop"] = observed_cop
+            derived["observed_cop_status"] = "OK"
+        else:
+            derived["observed_cop"] = -3.0
+            derived["observed_cop_status"] = "Implausible"
+    else:
+        derived["observed_cop"] = -3.0
 
     if not reading_valid:
         derived.update({"eta_seconds": -3.0, "cost_to_target_usd": -3.0, "mode_sanity": 4, "mode_sanity_text": "Idle"})
@@ -894,6 +976,7 @@ def run(args: argparse.Namespace) -> int:
                 heater_watts: float | None = None
                 pump_watts: float | None = None
                 observed_btu: float | None = None
+                observed_status = "No data"
                 try:
                     heater_watts = query_measurement_mean(
                         iotawatt_influx_config,
@@ -907,11 +990,12 @@ def run(args: argparse.Namespace) -> int:
                         "pump",
                         "-10m",
                     )
-                    observed_btu = query_observed_btu_per_hr(
+                    observed_btu, observed_status = query_observed_metrics(
                         influx_config,
                         influx_config.bucket,
                         args.measurement,
                         derived_config.pool_gallons,
+                        str(fields.get("mode") or "unknown").lower(),
                     )
                 except Exception as exc:
                     log(f"derived_history_query_failed error={exc}")
@@ -922,6 +1006,7 @@ def run(args: argparse.Namespace) -> int:
                     heater_watts,
                     pump_watts,
                     observed_btu,
+                    observed_status,
                 )
                 write_fields(args, influx_config, derived_fields, "derived")
                 last_derived_write = started

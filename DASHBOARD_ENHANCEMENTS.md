@@ -518,6 +518,9 @@ The poller computes derived metrics on a 1-min cadence, reads recent mean heater
 | `eta_seconds` | float | Same sentinels as panel #8 (`0` = at target, `-1` = mode mismatch, `-2` = unreachable, `>0` = seconds to target) |
 | `available_capacity_btu_hr` | float | Expected gross capacity for current ambient and mode |
 | `capacity_vs_rated_pct` | float | `available_capacity_btu_hr / 57650 * 100`, used by the dashboard gauge |
+| `observed_btu_hr` | float | 3-hour stable full-load regression estimate; `-3` when invalid/idle |
+| `observed_cop` | float | Observed COP when plausible; `-3` when invalid/idle |
+| `observed_cop_status` | string | `OK`, `Idle`, `Warmup`, `Low resolution`, `Not full load`, `Unstable load`, `Wrong direction`, or `Implausible` |
 | `heater_watts` | float | Mean iotaWatt heater power over the recent query window |
 | `pump_watts` | float | Mean iotaWatt pump power over the recent query window |
 | `cost_to_target_usd` | float | `(eta_seconds / 3600) × (heater_watts / 1000) × kWhPrice`; mirrors the eta sentinels |
