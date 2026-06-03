@@ -33,3 +33,8 @@ build/
 *.log
 logs/
 .grepai/
+
+# Local service wrapper binaries
+tools/*.exe
+tools/*.pdb
+tools/*.xml

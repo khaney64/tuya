@@ -18,6 +18,17 @@ Companion to `AGENTS.md`. Concrete instructions for enhancing https://github.com
 
 Cross-bucket queries are allowed in Flux — `from(bucket: "iotawatt")` and `from(bucket: "heater")` work in the same query and can be joined.
 
+## Pool temperature: prefer `pool_temp_f` over `water_in_f`
+
+The Shelly DS18B20 integration (`SHELLY_INTEGRATION.md`) is implemented. The poller writes a canonical field **`pool_temp_f`** alongside the existing `water_in_f`:
+
+- **`pool_temp_f`** — best available pool temperature, auto-promoted from whichever sensor is most trustworthy right now. Priority: Shelly probe > heater inlet (pump on) > heater inlet (pump off, marked stale). The dashboard should use this field for everything that conceptually means "pool water temperature".
+- **`pool_temp_source`** — string tag identifying which sensor produced the current `pool_temp_f`: `"shelly_100"`, `"shelly_101"`, `"heater_water_in"`, or `"heater_water_in_stale"`. Use for value-mapped status panels and as a Grafana annotation source when the value changes.
+- **`water_in_f`** — keeps its original meaning (heater inlet temperature, DP 102). Still useful as a secondary overlay to detect plumbing-run heat loss between pool and heater pad.
+- **`shelly_probe_100_f`, `shelly_probe_101_f`, ...** — raw per-probe readings. Always written when a probe is present. Useful for diagnostics; most panels should consume `pool_temp_f` instead.
+
+**Migration rule for panels in this doc:** any query that reads `water_in_f` because it wants "pool temperature" should use `pool_temp_f`. Queries that reference the heater inlet specifically (e.g. for a "Pool ↔ Heater Inlet Drift" panel) keep using `water_in_f`. The live Raypak dashboard's primary pool-temperature panels already use `pool_temp_f`.
+
 ## Configuration variables to add
 
 Add to Settings → Variables for the RaypakHeatPump.json dashboard:
@@ -82,9 +93,11 @@ This `flow_valid` stream is referenced in the BTU rate and COP panels below.
 **Position:** y=14, full width
 
 ```flux
+// MIGRATED: was water_in_f, now reads pool_temp_f (Shelly probe when available,
+// heater inlet as fallback). See "Pool temperature" note above.
 water = from(bucket: "heater")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
   |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
 
 weather = from(bucket: "heater")
@@ -146,6 +159,17 @@ from(bucket: "iotawatt")
 **Unit:** custom label "BTU/hr"
 **Note:** sign is *positive* in warm mode (water rising), *negative* in cool mode (water falling). Y-axis should allow negatives.
 
+> **Simplified — poller-derived.** The Flux query below is the original "compute from raw fields" version, kept for reference. As of the current `raypak_poller.py`, `observed_btu_hr` is computed in-poller and written as a field. The simpler dashboard query is:
+>
+> ```flux
+> from(bucket: "heater")
+>   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "observed_btu_hr")
+>   |> filter(fn: (r) => r._value != -3.0)  // drop "idle/circulation off" sentinel
+> ```
+>
+> The poller already gates on `pool_reading_valid` and `active_load` before emitting a non-sentinel value. Use the Flux below only if you need to backfill historical data from before the derived field existed.
+
 ```flux
 // Heater iotaWatt watts above 200 = meaningful operation
 heater_on_stream = from(bucket: "iotawatt")
@@ -172,11 +196,15 @@ flow_valid = union(tables: [pump_relay_stream, pump_watts_stream])
   |> distinct(column: "_time")
   |> keep(columns: ["_time"])
 
+// LEGACY/BACKFILL EXAMPLE: live observed BTU now comes from poller-derived
+// observed_btu_hr using pool_temp_f. If using this raw Flux query, use
+// pool_temp_f for pool-body temperature or water_in_f only for heater-inlet
+// diagnostics/backfill before the Shelly cutover.
 // Compute the BTU rate *before* the join, so _value is the rate we want.
-// difference() on water_in_f gives us °F per 5-min; multiply out to BTU/hr.
+// difference() on pool_temp_f gives us °F per 5-min; multiply out to BTU/hr.
 btu_rate = from(bucket: "heater")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
   |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
   |> difference(columns: ["_value"], nonNegative: false)
   |> map(fn: (r) => ({
@@ -200,7 +228,7 @@ joined2
 
 **Why this version works:** the original tried to call `difference()` *after* joining three tables that all had a `_value` column. Flux suffixes collided columns (`_value_w`, `_value_p`, `_value_pp`), so `difference(columns: ["_value"])` had nothing to operate on. Computing the rate *before* the join keeps `_value` unambiguous in the rate stream, and the join just acts as a gate (only emit timestamps where heater and flow are both valid).
 
-Compare visually against the Available Capacity panel (#7 below) — if observed is consistently 60% of expected, something's off (refrigerant, fouled coil, low flow). Note that 5-min samples will be noisy because water_in_f only changes by tenths of a degree; consider a 15-min smoothing in a follow-up query.
+Compare visually against the Available Capacity panel (#7 below) — if observed is consistently 60% of expected, something's off (refrigerant, fouled coil, low flow). Note that 5-min samples will still be noisy because pool temperature changes slowly; consider a 15-min smoothing in a follow-up query.
 
 ### 6. Observed COP gauge — using iotaWatt power
 
@@ -209,6 +237,17 @@ Compare visually against the Available Capacity panel (#7 below) — if observed
 **Min:** 0, **Max:** 7
 **Thresholds:** red <2, yellow 2-4, green >4 (heating); for cool mode, expect lower COP, adjust mentally
 **Decimals:** 2
+
+> **Simplified — poller-derived.** The poller computes `observed_cop` from a stable 3-hour full-load regression window with iotaWatt power as the denominator, and writes both the COP value and a status string `observed_cop_status` (e.g. `"OK"`, `"Implausible"`, `"Insufficient samples"`). The dashboard query is:
+>
+> ```flux
+> from(bucket: "heater")
+>   |> range(start: -10m)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "observed_cop")
+>   |> last()
+> ```
+>
+> Pair with a small text/stat panel showing `observed_cop_status` so the user knows why the gauge is empty when the poller has suppressed an unstable value. The Flux query below is the original raw-field implementation, kept for reference and backfill use only.
 
 ```flux
 import "experimental"
@@ -220,7 +259,7 @@ EXPECTED_SAMPLES = 12  // 60 min / 5 min
 
 water = from(bucket: "heater")
   |> range(start: -60m)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
   |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
 
 power = from(bucket: "iotawatt")
@@ -363,6 +402,17 @@ Display tip: add a panel field override for the label to include the mode — e.
 **Type:** Stat
 **Unit:** `s`
 
+> **Simplified — poller-derived.** The poller computes `eta_seconds` using the full mode-aware capacity model and writes it as a field. Sentinels: `-1.0` = mode mismatch, `-2.0` = invalid reading/setpoint, `-3.0` = circulation off (idle). The dashboard query is just:
+>
+> ```flux
+> from(bucket: "heater")
+>   |> range(start: -5m)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "eta_seconds")
+>   |> last()
+> ```
+>
+> Use panel value mappings (per the table below) to convert sentinels into friendly text. The Flux model below is kept for reference of the math the poller implements — and as the canonical place to update if the model needs revision (then mirror the change into `compute_derived_fields()` in `raypak_poller.py`).
+
 The trick: warm mode subtracts heat loss; cool mode subtracts heat gain (loss becomes gain that fights cooling). Both directions converge toward target, but at different rates and with different sign of the imbalance.
 
 ```flux
@@ -394,7 +444,7 @@ coolCapacity = (ambient_f) => {
 // --- gather current state ---
 water = from(bucket: "heater")
   |> range(start: -10m)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
   |> last()
   |> findRecord(fn: (key) => true, idx: 0)
 
@@ -555,16 +605,19 @@ A partial Flux implementation would either (a) silently use the wrong eta when m
 - Run derived writes on a 1-min cadence inside the polling daemon.
 - Mode mismatch detection lives in Python where it's straightforward (no Flux `findRecord` gymnastics).
 
-### 10. Modify existing "Pool, Setpoint, and Weather" — add heater's own ambient sensor
+### 10. Modify existing "Pool, Setpoint, and Weather" — add heater inlet overlay and heater ambient sensor
 
-The heater has its own ambient sensor (DP 124, written as `ambient_f`). When it diverges from the external `weather_temp_f`, it tells you something useful (sun on the unit case, microclimate, sensor drift). Update the query:
+The Shelly integration changes this panel's primary "Pool Water" line to come from `pool_temp_f` (the canonical pool reading). The heater inlet (`water_in_f`) becomes a secondary overlay that's interesting precisely because of its *difference* from the pool body — persistent divergence during pump-on operation indicates plumbing-run heat loss between the pool and the equipment pad.
+
+Also overlay the heater's own ambient sensor (DP 124, written as `ambient_f`) against the external `weather_temp_f` — divergence tells you something useful (sun on the unit case, microclimate, sensor drift).
 
 ```flux
 from(bucket: "heater")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
   |> filter(fn: (r) => r._measurement == "pool_heater")
   |> filter(fn: (r) =>
-       r._field == "water_in_f" or
+       r._field == "pool_temp_f" or       // PRIMARY pool reading (was water_in_f)
+       r._field == "water_in_f" or        // secondary — heater inlet
        r._field == "setpoint_f" or
        r._field == "weather_temp_f" or
        r._field == "ambient_f")
@@ -572,39 +625,84 @@ from(bucket: "heater")
   |> yield(name: "mean")
 ```
 
-Override `ambient_f` → displayName "Heater Sensor", color gray, dashed line. Keep `weather_temp_f` as solid "Outside".
+Field overrides:
+- `pool_temp_f` → displayName "Pool Water", color blue, solid line, width 2 (the headline metric)
+- `water_in_f` → displayName "Heater Inlet", color light blue, dashed line, width 1
+- `setpoint_f` → displayName "Setpoint", color green
+- `weather_temp_f` → displayName "Outside", color orange, solid
+- `ambient_f` → displayName "Heater Sensor", color gray, dashed line
 
-### 11. Modify existing "Water Temp" stat — add stale indicator
+### 11. Modify existing "Water Temp" stat — switch to `pool_temp_f` and use `pool_temp_source` for the stale indicator
 
-Add a thin sub-stat or color override when pump has been off recently:
+The new canonical field is `pool_temp_f`. The new way to express "is this reading trustworthy" is the `pool_temp_source` tag — much cleaner than gating on `pump_relay` ourselves.
 
 ```flux
-water = from(bucket: "heater")
+temp = from(bucket: "heater")
   |> range(start: -5m)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
   |> last()
-
-pump_recently_on = from(bucket: "heater")
-  |> range(start: -10m)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pump_relay")
-  |> filter(fn: (r) => r._value == true)
-  |> count()
-
-join(tables: {w: water, p: pump_recently_on}, on: [])
-  |> map(fn: (r) => ({
-      r with
-      _value: r._value_w,
-      _field: if r._value_p > 0 then "Pool Water (valid)" else "Pool Water (STALE — pump off)"
-    }))
 ```
 
-Field override on title for color: green when valid, orange when stale.
+Add a small adjacent stat panel showing `pool_temp_source` with value mappings:
+
+| Value | Display | Color |
+|-------|---------|-------|
+| `shelly_100` | "Shelly probe" | green |
+| `shelly_101` | "Shelly probe #2" | green |
+| `heater_water_in` | "Heater inlet (pump on)" | yellow |
+| `heater_water_in_stale` | "Heater inlet — pump off, stale" | orange |
+
+This is more useful than the original "stale indicator" — it tells the user *why* the value should or shouldn't be trusted, and degrades gracefully through the trust hierarchy as conditions change.
+
+> Original "Water Temp" stat panel (legacy reference — keep available for backfill):
+>
+> ```flux
+> water = from(bucket: "heater")
+>   |> range(start: -5m)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+>   |> last()
+>
+> pump_recently_on = from(bucket: "heater")
+>   |> range(start: -10m)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pump_relay")
+>   |> filter(fn: (r) => r._value == true)
+>   |> count()
+>
+> join(tables: {w: water, p: pump_recently_on}, on: [])
+>   |> map(fn: (r) => ({
+>       r with
+>       _value: r._value_w,
+>       _field: if r._value_p > 0 then "Pool Water (valid)" else "Pool Water (STALE — pump off)"
+>     }))
+> ```
+>
+> Field override on title for color: green when valid, orange when stale.
 
 ### 12. Mode-aware operating sanity panel
 
 **Title:** Mode Sanity
 **Type:** Stat with value mappings
 **Purpose:** flag obvious misconfigurations (cool mode on a cold day, warm mode on a hot day)
+
+> **Simplified — poller-derived.** `mode_sanity` (integer) and `mode_sanity_text` (string) are both written by `compute_derived_fields()` in `raypak_poller.py`. The dashboard reads the field directly:
+>
+> ```flux
+> from(bucket: "heater")
+>   |> range(start: -5m)
+>   |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "mode_sanity")
+>   |> last()
+> ```
+>
+> Value mappings (apply in the Stat panel):
+>
+> | Value | Display | Color |
+> |-------|---------|-------|
+> | `0` | Normal | green |
+> | `1` | Marginal | yellow |
+> | `2` | Mode mismatch | red |
+> | `4` | Idle (circulation off) | gray |
+>
+> The Flux below is the original logic preserved as a reference for the math; if you change either, mirror it into the poller.
 
 ```flux
 mode = from(bucket: "heater") |> range(start: -10m)
@@ -628,6 +726,95 @@ array.from(rows: [{ _time: now(), _value: state, _field: "sanity" }])
 
 Value mappings: 0 = "Normal" green, 1 = "Marginal" yellow, 2 = "Mode mismatch" red.
 
+## New panels enabled by Shelly integration
+
+These panels become possible once `SHELLY_INTEGRATION.md` has been implemented and `pool_temp_f`, `pool_temp_source`, and `shelly_probe_NNN_f` are being written.
+
+### 13. Pool ↔ Heater Inlet Drift
+
+**Title:** Pool ↔ Heater Inlet Drift
+**Type:** Time series
+**Unit:** `fahrenheit`
+**Purpose:** Surface plumbing-run heat loss between pool body and heater pad. Also catches sensor offset between Shelly and heater inlet sensor.
+
+```flux
+pool = from(bucket: "heater")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_f")
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+
+heater = from(bucket: "heater")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+
+join(tables: {p: pool, h: heater}, on: ["_time"])
+  |> map(fn: (r) => ({
+      _time: r._time,
+      _value: r._value_p - r._value_h,
+      _field: "pool_minus_inlet"
+    }))
+```
+
+In steady-state pump-on operation, this should hover near zero (small positive: heater inlet slightly cooler than pool because of plumbing-run heat loss to ground). When the pump turns off, expect this to grow large — that's the heater housing cooling off while the pool stays steady. The interesting signal is the steady-state pump-on value, which characterizes your plumbing.
+
+### 14. Pool Temp Source indicator
+
+**Title:** Pool Temp Source
+**Type:** Stat with value mappings (described in section 11 above; this is a small dedicated panel for the same field)
+**Purpose:** At-a-glance "is the dashboard showing trustworthy pool temperature right now?"
+
+```flux
+from(bucket: "heater")
+  |> range(start: -5m)
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "pool_temp_source")
+  |> last()
+```
+
+### 15. Shelly device health row (collapsed by default)
+
+Three small stat panels in a collapsed row labeled "Shelly Health":
+
+- **Shelly CPU Temp** — field `shelly_cpu_c`. Thresholds: green <50, yellow 50-70, red >70 (the device's enclosure is overheating)
+- **Shelly WiFi RSSI** — field `shelly_rssi`. Thresholds: green better than -60, yellow -60 to -75, red worse than -75
+- **Shelly Uptime** — field `shelly_uptime_s`. Format as duration. Sudden drop to <60s means the Shelly rebooted.
+
+### 16. Heat Exchanger ΔT (requires second Shelly probe)
+
+Only relevant once a second DS18B20 is installed (likely plumbed into the heater return line via a thermowell). At that point the second probe's field will be `shelly_probe_101_f` (or whichever ID firmware assigns; see `HEATER_RETURN_PROBE_ID` env var in `SHELLY_INTEGRATION.md`).
+
+**Title:** Heat Exchanger ΔT
+**Type:** Time series
+**Unit:** `fahrenheit`
+**Purpose:** Real-time heat-exchanger performance. Should sit at 3-8°F during normal warm-mode operation; near zero means the heater isn't transferring heat (refrigerant leak, fouled coil, expansion valve issue). Inverted (negative) in cool mode.
+
+```flux
+inlet = from(bucket: "heater")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "water_in_f")
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+
+return_t = from(bucket: "heater")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "shelly_probe_101_f")
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+
+join(tables: {i: inlet, r: return_t}, on: ["_time"])
+  |> map(fn: (r) => ({
+      _time: r._time,
+      _value: r._value_r - r._value_i,
+      _field: "exchanger_delta_f"
+    }))
+```
+
+This also opens up a *direct* BTU output calculation independent of pool volume estimates:
+
+```
+BTU/hr = GPM × 500 × ΔT_°F
+```
+
+where GPM comes from the heater's advised flow (28.5-37.5; midpoint 33 is a reasonable default). When this panel agrees with the poller's `observed_btu_hr` (which uses pool ΔT × gallons), you have cross-validation that both numbers are right. When they disagree, the one to trust is the direct measurement — and the disagreement tells you something about the pool volume estimate.
+
 ## Suggested layout (post-enhancement)
 
 ```
@@ -641,7 +828,7 @@ Row 3 (existing time series, y=10, h=9):
   Pool, Setpoint, and Weather (+ ambient_f overlay)
 
 Row 4 (new, y=19, h=6):
-  Temperature Differential (water - ambient)
+  Temperature Differential (pool - ambient)
   Observed BTU Rate
 
 Row 5 (existing, y=25, h=8):
@@ -649,9 +836,16 @@ Row 5 (existing, y=25, h=8):
 
 Row 6 (new, y=33, h=7):
   Observed COP History
+  Pool ↔ Heater Inlet Drift  (post-Shelly)
 
 Row 7 (existing, y=40, h=7):
   Fault History | Latest Telemetry
+
+Row 8 (new, y=47, h=4, collapsed):
+  Shelly Health: CPU Temp | RSSI | Uptime | Pool Temp Source
+
+Row 9 (future, when second probe installed):
+  Heat Exchanger ΔT
 ```
 
 ## How to apply these changes

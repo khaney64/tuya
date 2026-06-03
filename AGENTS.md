@@ -31,6 +31,7 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
   - **Cool mode:** target < current → heater removes heat → temperature falls toward target.
 - **Pool circulation pump runs on a schedule** (off overnight typically). When pump is off, `water_in_f` reads stagnant water inside the heater housing, not pool average.
 - **Pool volume model:** 15×30 oval above-ground pool, 52-inch wall, typically filled to 46 inches. Use **10,100 gallons** as the working volume for dashboard ETA/BTU/COP math.
+- **Auxiliary pool sensor:** a **Shelly Plus 1 + Plus Add-On + DS18B20 probe** (IP `192.168.86.71`, MAC `B8D61A886348`) sits on the equipment pad providing a true pool-body temperature that's valid 24/7, independent of pump state. See `SHELLY_INTEGRATION.md` for the integration spec. The heater's `water_in_f` (DP 102) becomes a secondary reading useful for heater-inlet-vs-pool drift detection.
 
 ## Current implementation state
 
@@ -42,8 +43,14 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
 - Grafana dashboard `RaypakHeatPump.json` live with panels: Load, Fault Status, Water Temp, Setpoint, Weather Temp, Mode, Run State, time series (water/setpoint/outside), compressor/fan load time series, fault history table, latest telemetry table
 - Weather temperature being pulled from external source and written to same measurement as `weather_temp_f` (allowing single-query overlays)
 - Fault decoding implemented (`fault_codes` string field, empty when no faults)
-- Polling presumed to be at ~10s interval given the dashboard's 30s refresh
-- **iotaWatt-based power monitoring** already running independently — measures wall-side power draw of the heater unit and circulation pump. Stored in bucket `iotawatt`. This is the *authoritative power source* for kWh/cost calculations; the heater's reported `comp_amps` is just compressor current and misses fan, control board, and inverter losses.
+- Polling at 30s interval via the `RaypakPoller` Windows service, with adaptive fault sub-sampling at 2s × up to 5 attempts when a poll doesn't see expected fields
+- Derived metrics computed in-poller (see schema section above), avoiding fragile Flux computation
+- Cross-bucket iotaWatt integration: poller queries `iotawatt` bucket for `heater_watts` and `pump_watts` each cycle, used in COP/BTU calc and as a pump-on fallback when `pump_relay` is unavailable
+- **iotaWatt-based power monitoring** running independently — measures wall-side power draw of the heater unit and circulation pump. Stored in bucket `iotawatt`. This is the *authoritative power source* for kWh/cost calculations; the heater's reported `comp_amps` is just compressor current and misses fan, control board, and inverter losses.
+
+✅ **Working as of session 3:**
+
+- **Shelly DS18B20 pool probe integration.** Hardware deployed (Shelly Plus 1 UL + Plus Add-On + one DS18B20 at `192.168.86.71`), live reading verified from `temperature:100` in pool water. The poller writes `shelly_probe_100_f`, promotes it to canonical `pool_temp_f`, and writes `pool_temp_source = "shelly_100"`. If the Shelly reading is unavailable or implausible, the poller falls back to heater `water_in_f` and marks the source as `heater_water_in` or `heater_water_in_stale`. Raypak dashboard primary pool-temperature panels read `pool_temp_f`.
 
 ## InfluxDB schemas in play
 
@@ -70,8 +77,11 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
 | `comp_amps`      | int    | DP 126    | Compressor current (use iotawatt for whole-unit power) |
 | `fault_codes`    | string | DP 115/116 derived | Empty string = no fault |
 
-**Likely additional fields (presumed being written but not yet on dashboard):**
-`ambient_f`, `outpipe_f`, `exhaust_f`, `silent_mode`, `comp_relay`, `pump_relay`, `defrost`, `ac_fan_speed`, `warm_or_cool`
+**Additional fields the poller writes** (confirmed in `raypak_poller.py`):
+`ambient_f` (DP 124), `outpipe_f` (DP 120), `exhaust_f` (DP 122), `silent_mode` (DP 117), `comp_relay` (DP 134), `pump_relay` (DP 135), `defrost` (DP 130), `ac_fan_speed` (DP 140), `warm_or_cool` (DP 118).
+
+**Derived fields computed in `raypak_poller.py` and written to InfluxDB** (no Flux computation needed — query directly):
+`available_capacity_btu_hr`, `capacity_vs_rated_pct`, `eta_seconds`, `cost_to_target_usd`, `observed_btu_hr`, `observed_cop`, `observed_cop_status`, `pool_reading_valid`, `mode_sanity`, `mode_sanity_text`, `target_temp_f`, `pool_gallons`, `pump_watts`, `heater_watts`, `active_load`. Sentinel values: `-2.0` (invalid reading/setpoint), `-3.0` (idle/circulation off). See `DASHBOARD_ENHANCEMENTS.md` for which panels consume which derived fields.
 
 ### iotaWatt power data (from separate iotaWatt monitoring)
 
@@ -321,40 +331,41 @@ heater.set_value(103, 1)             # 1=F, 0=C
 - **Two ambient sources:** `weather_temp_f` (external API, always valid) and `ambient_f` (DP 124, only valid when heater running). Use external for predictions, heater's for sanity checks.
 - **Use iotaWatt for power, not `comp_amps`.** Compressor amps miss fan, controls, inverter losses. iotaWatt measures whole-unit wall draw and is already integrated.
 - **`pool_heater` measurement name collision.** Same name in two buckets (`heater` for telemetry, `iotawatt` for power). Disambiguate by bucket in queries; never assume which one.
+- **Secrets in repo.** `devices.json` (contains `local_key`), `tinytuya.json` (contains `apiKey`/`apiSecret`), `tuya-raw.json`, and `snapshot.json` are all listed in `.gitignore` and must never be committed. If any of these is shared accidentally (e.g. uploaded for review), rotate the affected secret in the Tuya IoT portal (Cloud project → Authorization Key) and re-run `python -m tinytuya wizard` to refresh `devices.json`.
 
 ## Next steps (priority order)
 
 ### Already done
 
 - ✅ Wizard, local_key retrieval, polling daemon, basic dashboard, iotaWatt power monitoring, Pool cost dashboard
+- ✅ `pump_relay` and `comp_relay` written by polling daemon (DPS_MAP entries confirmed in `raypak_poller.py`)
+- ✅ Pump-on validity fallback (`pump_relay OR pump_watts >= threshold`) already implemented in `compute_derived_fields()`
+- ✅ Derived metrics (eta, COP, BTU, capacity, sanity) computed in poller — dashboard reads them as fields
+- ✅ Shelly DS18B20 pool probe #100 integrated into the poller and dashboard via canonical `pool_temp_f`
 
 ### In progress
 
-1. **Dashboard enhancements** — see `DASHBOARD_ENHANCEMENTS.md` for detailed task list. Top items:
-   - Pump-on filter (`pump_relay`) verification and propagation through thermal queries
-   - Time-to-target panel — handles both warm and cool modes
-   - Δtemp (water vs ambient) panel
-   - Observed COP using iotaWatt input power as denominator (more accurate than comp_amps)
-   - Pump-on water_in_f only / "valid pool reading" indicator
-   - Available capacity panel showing spec-sheet expected BTU/hr at current ambient and current mode
+1. **Dashboard enhancements** — see `DASHBOARD_ENHANCEMENTS.md` for the remaining panel additions. Many panels described there now read poller-derived fields directly rather than computing in Flux; the file flags which ones.
 
 ### Pending
 
-2. **Heater capacity model** now lives inside `raypak_poller.py` as derived metrics written to InfluxDB (`available_capacity_btu_hr`, `capacity_vs_rated_pct`, `eta_seconds`, `cost_to_target_usd`, `observed_btu_hr`, `observed_cop`, `observed_cop_status`, `pool_reading_valid`, `mode_sanity`). ETA/cost use heater `setpoint_f` by default; `RAYPAK_TARGET_TEMP_F` is only an optional override. Observed COP uses a stable 3-hour full-load regression window and is suppressed when unstable or implausible. When circulation is off, derived state is written as idle (`eta_seconds=-3`, `cost_to_target_usd=-3`, `mode_sanity=4`). Extract to `raypak/thermal.py` later if OpenClaw needs to reuse the same math.
+2. **Heater capacity model extraction** — current model lives inside `raypak_poller.py`. With Shelly integration stable, consider extracting to a reusable `raypak/thermal.py` module so OpenClaw automation can use the same math without importing the poller.
 3. **Cool-mode capacity calibration** — capture cool-mode operation data over a hot week to fit the curve empirically. Current cool-mode numbers are estimates.
-4. **Pool volume calibration** — working estimate is 10,100 gallons. Calibration approach: known-state run (record water temp, run heater for 2 hours under steady conditions, measure rise, back-solve for effective gallons). Until then, ETA/COP are estimates.
+4. **Pool volume calibration** — working estimate is 10,100 gallons. With the Shelly probe providing trustworthy pool-body temperature 24/7, calibration becomes practical: known-state run (record water temp, run heater for 2 hours under steady conditions, measure rise, back-solve for effective gallons).
 5. **Control endpoint** — FastAPI service exposing `/heater/power`, `/heater/setpoint`, `/heater/mode`. Single socket to device, multiplexed across HTTP callers.
 6. **OpenClaw integration** — wrap FastAPI as a skill. Example automations:
    - "Warm pool to 88°F by 4pm Saturday if forecast ambient ≥ 65°F"
    - "If forecast high > 95°F tomorrow, switch to cool mode at 6am, target 82°F"
    - "Estimate cost to reach setpoint" using iotaWatt power × time-to-target × kWhPrice
 7. **Alerting** — Grafana alerts:
-   - Heater running but `water_in_f` slope ~0 over 30 min (with pump on) → mechanical issue
+   - Heater running but `pool_temp_f` slope ~0 over 30 min (with pump on) → mechanical issue
    - Non-empty `fault_codes` → notification
    - Whole-unit power (iotaWatt) significantly higher than expected for current operating condition → degraded performance
    - Mode = `cool` but ambient < 75°F (probably a forgotten setting)
    - Mode = `warm` but ambient > 90°F (questionable — waste of energy)
+   - `pool_temp_source = "heater_water_in_stale"` for more than 12h continuous → Shelly is offline and pump hasn't run
 8. **Cross-dashboard linking** — add a dashboard link from RaypakHeatPump.json to Pool.json and vice versa.
+9. **Second Shelly DS18B20 probe** — when installed (heater return line via thermowell), enables direct heat-exchanger ΔT panel and real-time BTU output via `(GPM × 500 × ΔT)`. Additional poller/dashboard work will be needed to designate the return-line probe and calculate direct heat-exchanger ΔT.
 
 ## Reference links
 
@@ -363,4 +374,6 @@ heater.set_value(103, 1)             # 1=F, 0=C
 - Raypak Crosswind DPS dump: https://github.com/rospogrigio/localtuya/issues/2066
 - HA community thread: https://community.home-assistant.io/t/raypak-crosswinds-inverter-pool-heater-tuya-tywe1s/912840
 - Tuya IoT portal: https://iot.tuya.com
+- Shelly Gen2 RPC docs: https://shelly-api-docs.shelly.cloud/gen2/
 - Project repo: https://github.com/khaney64/tuya
+- Companion docs in this repo: `SHELLY_INTEGRATION.md`, `DASHBOARD_ENHANCEMENTS.md`, `README.md`

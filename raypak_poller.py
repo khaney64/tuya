@@ -41,6 +41,10 @@ OBSERVED_MIN_TEMP_DELTA_F = 2.0
 OBSERVED_MAX_COP = 8.0
 OBSERVED_CAPACITY_FACTOR = 1.25
 IOTAWATT_BUCKET = "iotawatt"
+SHELLY_TIMEOUT_SECONDS = 5.0
+SHELLY_MIN_PLAUSIBLE_F = 32.0
+SHELLY_MAX_PLAUSIBLE_F = 110.0
+SHELLY_POOL_PROBE_ID = 100
 
 HEATER_TAGS = {
     "host": "heater_pool",
@@ -150,6 +154,15 @@ class DerivedConfig:
     interval_seconds: float
     iotawatt_bucket: str
     has_cover: bool
+
+
+@dataclass(frozen=True)
+class ShellyConfig:
+    ip: str
+    pool_probe_id: int
+    timeout_s: float
+    min_plausible_f: float
+    max_plausible_f: float
 
 
 class InfluxWriteError(RuntimeError):
@@ -270,6 +283,18 @@ def arg_or_env_float(arg_value: float | None, env_name: str, default: float) -> 
     return default if env_value is None else env_value
 
 
+def arg_or_env_int(arg_value: int | None, env_name: str, default: int) -> int:
+    if arg_value is not None:
+        return int(arg_value)
+    value = os.getenv(env_name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be an integer") from exc
+
+
 def load_derived_config(args: argparse.Namespace) -> DerivedConfig:
     pool_gallons = arg_or_env_float(args.pool_gallons, "RAYPAK_POOL_GALLONS", POOL_GALLONS)
     target_temp_f = args.target_temp_f
@@ -308,6 +333,46 @@ def load_derived_config(args: argparse.Namespace) -> DerivedConfig:
         interval_seconds=interval_seconds,
         iotawatt_bucket=iotawatt_bucket,
         has_cover=has_cover,
+    )
+
+
+def load_shelly_config(args: argparse.Namespace) -> ShellyConfig | None:
+    shelly_ip = args.shelly_ip or os.getenv("RAYPAK_SHELLY_IP")
+    if shelly_ip is None or not shelly_ip.strip():
+        return None
+
+    timeout_s = arg_or_env_float(
+        args.shelly_timeout_s,
+        "RAYPAK_SHELLY_TIMEOUT_S",
+        SHELLY_TIMEOUT_SECONDS,
+    )
+    min_plausible_f = arg_or_env_float(
+        args.shelly_min_plausible_f,
+        "RAYPAK_SHELLY_MIN_PLAUSIBLE_F",
+        SHELLY_MIN_PLAUSIBLE_F,
+    )
+    max_plausible_f = arg_or_env_float(
+        args.shelly_max_plausible_f,
+        "RAYPAK_SHELLY_MAX_PLAUSIBLE_F",
+        SHELLY_MAX_PLAUSIBLE_F,
+    )
+    pool_probe_id = arg_or_env_int(
+        args.pool_probe_id,
+        "RAYPAK_POOL_PROBE_ID",
+        SHELLY_POOL_PROBE_ID,
+    )
+
+    if timeout_s <= 0:
+        raise ValueError("Shelly timeout must be greater than 0")
+    if min_plausible_f >= max_plausible_f:
+        raise ValueError("Shelly plausible min must be less than max")
+
+    return ShellyConfig(
+        ip=shelly_ip.strip(),
+        pool_probe_id=pool_probe_id,
+        timeout_s=timeout_s,
+        min_plausible_f=min_plausible_f,
+        max_plausible_f=max_plausible_f,
     )
 
 
@@ -427,6 +492,50 @@ def fetch_weather_temp_f(latitude: float, longitude: float) -> float:
     if temp is None:
         raise ValueError("Open-Meteo response missing current.temperature_2m")
     return float(temp)
+
+
+def fetch_shelly_status(config: ShellyConfig) -> dict[str, Any]:
+    url = f"http://{config.ip}/rpc/Shelly.GetStatus"
+    request = urllib.request.Request(url, headers={"User-Agent": "raypak-poller/1.0"})
+    with urllib.request.urlopen(request, timeout=config.timeout_s) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def is_plausible_temp_f(value: Any, config: ShellyConfig) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    value_f = float(value)
+    return math.isfinite(value_f) and config.min_plausible_f <= value_f <= config.max_plausible_f
+
+
+def shelly_temperature_fields(status: dict[str, Any], config: ShellyConfig) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key, value in status.items():
+        match = re.fullmatch(r"temperature:(\d+)", str(key))
+        if not match or not isinstance(value, dict):
+            continue
+
+        probe_id = int(match.group(1))
+        temp_f = value.get("tF")
+        if is_plausible_temp_f(temp_f, config):
+            fields[f"shelly_probe_{probe_id}_f"] = round(float(temp_f), 1)
+    return fields
+
+
+def promote_pool_temperature(fields: dict[str, Any], config: ShellyConfig | None) -> None:
+    if config is not None:
+        shelly_value = fields.get(f"shelly_probe_{config.pool_probe_id}_f")
+        if is_plausible_temp_f(shelly_value, config):
+            fields["pool_temp_f"] = float(shelly_value)
+            fields["pool_temp_source"] = f"shelly_{config.pool_probe_id}"
+            return
+
+    heater_value = numeric_field(fields, "water_in_f")
+    if heater_value is None:
+        return
+
+    fields["pool_temp_f"] = heater_value
+    fields["pool_temp_source"] = "heater_water_in" if fields.get("pump_relay") else "heater_water_in_stale"
 
 
 def escape_measurement(value: str) -> str:
@@ -621,7 +730,7 @@ def query_observed_metrics(
             f"from(bucket: {flux_string(bucket)})",
             "  |> range(start: -3h)",
             f"  |> filter(fn: (r) => r._measurement == {flux_string(measurement)})",
-            '  |> filter(fn: (r) => r._field == "water_in_f" or r._field == "speed_pct" or r._field == "pool_reading_valid" or r._field == "active_load")',
+            '  |> filter(fn: (r) => r._field == "pool_temp_f" or r._field == "speed_pct" or r._field == "pool_reading_valid" or r._field == "active_load")',
             "  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)",
         ]
     )
@@ -635,7 +744,7 @@ def query_observed_metrics(
         if row.get("_field") == "pool_reading_valid" or row.get("_field") == "active_load":
             valid_rows.append((timestamp, str(row.get("_value")).lower() == "true"))
             continue
-        if row.get("_field") != "water_in_f":
+        if row.get("_field") != "pool_temp_f":
             continue
         try:
             value = float(row.get("_value", ""))
@@ -776,7 +885,7 @@ def compute_derived_fields(
     observed_btu: float | None,
     observed_status: str,
 ) -> dict[str, Any]:
-    water_f = numeric_field(fields, "water_in_f")
+    water_f = numeric_field(fields, "pool_temp_f")
     weather_f = numeric_field(fields, "weather_temp_f")
     ambient_f = weather_f if weather_f is not None else numeric_field(fields, "heater_ambient_f")
     mode = str(fields.get("mode") or "unknown").lower()
@@ -921,6 +1030,7 @@ def run(args: argparse.Namespace) -> int:
     device_config = load_device_config(device_file)
     influx_config = load_influx_config(env_file)
     derived_config = load_derived_config(args)
+    shelly_config = load_shelly_config(args)
     iotawatt_influx_config = load_iotawatt_influx_config(influx_config, derived_config.iotawatt_bucket)
     weather_location = resolve_weather_location(args)
     effective_persistent = args.persistent
@@ -938,7 +1048,9 @@ def run(args: argparse.Namespace) -> int:
         f"persistent={str(effective_persistent).lower()} "
         f"pool_gallons={derived_config.pool_gallons:g} "
         f"target_temp_f={derived_config.target_temp_f if derived_config.target_temp_f is not None else 'setpoint'} "
-        f"weather_enabled={str(weather_location is not None).lower()}"
+        f"weather_enabled={str(weather_location is not None).lower()} "
+        f"shelly_enabled={str(shelly_config is not None).lower()} "
+        f"pool_probe_id={shelly_config.pool_probe_id if shelly_config is not None else 'none'}"
     )
 
     while True:
@@ -970,6 +1082,14 @@ def run(args: argparse.Namespace) -> int:
             )
             if weather_temp_f is not None:
                 fields["weather_temp_f"] = weather_temp_f
+
+            if shelly_config is not None:
+                try:
+                    fields.update(shelly_temperature_fields(fetch_shelly_status(shelly_config), shelly_config))
+                except Exception as exc:
+                    log(f"shelly_fetch_failed error={exc}")
+
+            promote_pool_temperature(fields, shelly_config)
 
             write_fields(args, influx_config, fields, "telemetry")
             if started - last_derived_write >= derived_config.interval_seconds or args.once:
@@ -1040,6 +1160,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--heater-watt-threshold", type=float, default=None)
     parser.add_argument("--derived-interval-seconds", type=float, default=None)
     parser.add_argument("--iotawatt-bucket", default=None)
+    parser.add_argument("--shelly-ip", default=None)
+    parser.add_argument("--pool-probe-id", type=int, default=None)
+    parser.add_argument("--shelly-timeout-s", type=float, default=None)
+    parser.add_argument("--shelly-min-plausible-f", type=float, default=None)
+    parser.add_argument("--shelly-max-plausible-f", type=float, default=None)
     parser.add_argument("--measurement", default=MEASUREMENT)
     parser.add_argument("--device-file", default=DEVICE_FILE)
     parser.add_argument("--env-file", default=None)
