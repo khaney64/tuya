@@ -23,9 +23,11 @@ Cross-bucket queries are allowed in Flux — `from(bucket: "iotawatt")` and `fro
 The Shelly DS18B20 integration (`SHELLY_INTEGRATION.md`) is implemented. The poller writes a canonical field **`pool_temp_f`** alongside the existing `water_in_f`:
 
 - **`pool_temp_f`** — best available pool temperature, auto-promoted from whichever sensor is most trustworthy right now. Priority: Shelly probe > heater inlet (pump on) > heater inlet (pump off, marked stale). The dashboard should use this field for everything that conceptually means "pool water temperature".
-- **`pool_temp_source`** — string tag identifying which sensor produced the current `pool_temp_f`: `"shelly_100"`, `"shelly_101"`, `"heater_water_in"`, or `"heater_water_in_stale"`. Use for value-mapped status panels and as a Grafana annotation source when the value changes.
+- **`pool_temp_source`** — string tag identifying which sensor produced the current `pool_temp_f`: `"shelly_100"`, `"heater_water_in"`, or `"heater_water_in_stale"`. Use for value-mapped status panels and as a Grafana annotation source when the value changes.
+- **`outside_temp_f`** — best available outside-air temperature. Priority: Shelly outside probe `101` > API weather fallback. Dashboard panels and derived capacity math should use this field when they need outside air.
+- **`outside_temp_source`** — string tag identifying which sensor produced the current `outside_temp_f`: `"shelly_101"` or `"weather_api"`.
 - **`water_in_f`** — keeps its original meaning (heater inlet temperature, DP 102). Still useful as a secondary overlay to detect plumbing-run heat loss between pool and heater pad.
-- **`shelly_probe_100_f`, `shelly_probe_101_f`, ...** — raw per-probe readings. Always written when a probe is present. Useful for diagnostics; most panels should consume `pool_temp_f` instead.
+- **`shelly_probe_100_f`, `shelly_probe_101_f`, ...** — raw per-probe readings. Always written when a probe is present. `100` is pool water and `101` is outside air; most panels should consume canonical fields instead.
 
 **Migration rule for panels in this doc:** any query that reads `water_in_f` because it wants "pool temperature" should use `pool_temp_f`. Queries that reference the heater inlet specifically (e.g. for a "Pool ↔ Heater Inlet Drift" panel) keep using `water_in_f`. The live Raypak dashboard's primary pool-temperature panels already use `pool_temp_f`.
 
@@ -102,7 +104,7 @@ water = from(bucket: "heater")
 
 weather = from(bucket: "heater")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "weather_temp_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "outside_temp_f")
   |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
 
 join(tables: {w: water, a: weather}, on: ["_time"])
@@ -605,11 +607,11 @@ A partial Flux implementation would either (a) silently use the wrong eta when m
 - Run derived writes on a 1-min cadence inside the polling daemon.
 - Mode mismatch detection lives in Python where it's straightforward (no Flux `findRecord` gymnastics).
 
-### 10. Modify existing "Pool, Setpoint, and Weather" — add heater inlet overlay and heater ambient sensor
+### 10. Modify existing "Pool, Setpoint, and Outside" — add heater inlet overlay and heater ambient sensor
 
 The Shelly integration changes this panel's primary "Pool Water" line to come from `pool_temp_f` (the canonical pool reading). The heater inlet (`water_in_f`) becomes a secondary overlay that's interesting precisely because of its *difference* from the pool body — persistent divergence during pump-on operation indicates plumbing-run heat loss between the pool and the equipment pad.
 
-Also overlay the heater's own ambient sensor (DP 124, written as `ambient_f`) against the external `weather_temp_f` — divergence tells you something useful (sun on the unit case, microclimate, sensor drift).
+Also overlay the heater's own ambient sensor (DP 124, written as `ambient_f`) against canonical `outside_temp_f` — divergence tells you something useful (sun on the unit case, microclimate, sensor drift).
 
 ```flux
 from(bucket: "heater")
@@ -619,7 +621,7 @@ from(bucket: "heater")
        r._field == "pool_temp_f" or       // PRIMARY pool reading (was water_in_f)
        r._field == "water_in_f" or        // secondary — heater inlet
        r._field == "setpoint_f" or
-       r._field == "weather_temp_f" or
+       r._field == "outside_temp_f" or
        r._field == "ambient_f")
   |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
   |> yield(name: "mean")
@@ -629,7 +631,7 @@ Field overrides:
 - `pool_temp_f` → displayName "Pool Water", color blue, solid line, width 2 (the headline metric)
 - `water_in_f` → displayName "Heater Inlet", color light blue, dashed line, width 1
 - `setpoint_f` → displayName "Setpoint", color green
-- `weather_temp_f` → displayName "Outside", color orange, solid
+- `outside_temp_f` → displayName "Outside", color orange, solid
 - `ambient_f` → displayName "Heater Sensor", color gray, dashed line
 
 ### 11. Modify existing "Water Temp" stat — switch to `pool_temp_f` and use `pool_temp_source` for the stale indicator
@@ -779,9 +781,9 @@ Three small stat panels in a collapsed row labeled "Shelly Health":
 - **Shelly WiFi RSSI** — field `shelly_rssi`. Thresholds: green better than -60, yellow -60 to -75, red worse than -75
 - **Shelly Uptime** — field `shelly_uptime_s`. Format as duration. Sudden drop to <60s means the Shelly rebooted.
 
-### 16. Heat Exchanger ΔT (requires second Shelly probe)
+### 16. Heat Exchanger ΔT (requires future Shelly heater-output probe)
 
-Only relevant once a second DS18B20 is installed (likely plumbed into the heater return line via a thermowell). At that point the second probe's field will be `shelly_probe_101_f` (or whichever ID firmware assigns; see `HEATER_RETURN_PROBE_ID` env var in `SHELLY_INTEGRATION.md`).
+Only relevant once another DS18B20 is installed and plumbed into the heater return/output line via a thermowell. Do not use `shelly_probe_101_f`; that probe is outside air. Use whichever new ID the firmware assigns.
 
 **Title:** Heat Exchanger ΔT
 **Type:** Time series
@@ -796,7 +798,7 @@ inlet = from(bucket: "heater")
 
 return_t = from(bucket: "heater")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "shelly_probe_101_f")
+  |> filter(fn: (r) => r._measurement == "pool_heater" and r._field == "shelly_probe_<heater_output_id>_f")
   |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
 
 join(tables: {i: inlet, r: return_t}, on: ["_time"])
@@ -825,7 +827,7 @@ Row 2 (new, y=5, h=5):
   Power Draw (kW) | kWh Today | Capacity vs Rated | Observed COP | Time to Setpoint | Cost to Setpoint | Mode Sanity
 
 Row 3 (existing time series, y=10, h=9):
-  Pool, Setpoint, and Weather (+ ambient_f overlay)
+  Pool, Setpoint, and Outside (+ ambient_f overlay)
 
 Row 4 (new, y=19, h=6):
   Temperature Differential (pool - ambient)

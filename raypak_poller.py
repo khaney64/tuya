@@ -45,6 +45,7 @@ SHELLY_TIMEOUT_SECONDS = 5.0
 SHELLY_MIN_PLAUSIBLE_F = 32.0
 SHELLY_MAX_PLAUSIBLE_F = 110.0
 SHELLY_POOL_PROBE_ID = 100
+SHELLY_OUTSIDE_PROBE_ID = 101
 
 HEATER_TAGS = {
     "host": "heater_pool",
@@ -160,6 +161,7 @@ class DerivedConfig:
 class ShellyConfig:
     ip: str
     pool_probe_id: int
+    outside_probe_id: int
     timeout_s: float
     min_plausible_f: float
     max_plausible_f: float
@@ -361,6 +363,11 @@ def load_shelly_config(args: argparse.Namespace) -> ShellyConfig | None:
         "RAYPAK_POOL_PROBE_ID",
         SHELLY_POOL_PROBE_ID,
     )
+    outside_probe_id = arg_or_env_int(
+        args.outside_probe_id,
+        "RAYPAK_SHELLY_OUTSIDE_PROBE_ID",
+        SHELLY_OUTSIDE_PROBE_ID,
+    )
 
     if timeout_s <= 0:
         raise ValueError("Shelly timeout must be greater than 0")
@@ -370,6 +377,7 @@ def load_shelly_config(args: argparse.Namespace) -> ShellyConfig | None:
     return ShellyConfig(
         ip=shelly_ip.strip(),
         pool_probe_id=pool_probe_id,
+        outside_probe_id=outside_probe_id,
         timeout_s=timeout_s,
         min_plausible_f=min_plausible_f,
         max_plausible_f=max_plausible_f,
@@ -536,6 +544,20 @@ def promote_pool_temperature(fields: dict[str, Any], config: ShellyConfig | None
 
     fields["pool_temp_f"] = heater_value
     fields["pool_temp_source"] = "heater_water_in" if fields.get("pump_relay") else "heater_water_in_stale"
+
+
+def promote_outside_temperature(fields: dict[str, Any], config: ShellyConfig | None) -> None:
+    if config is not None:
+        shelly_value = fields.get(f"shelly_probe_{config.outside_probe_id}_f")
+        if is_plausible_temp_f(shelly_value, config):
+            fields["outside_temp_f"] = float(shelly_value)
+            fields["outside_temp_source"] = f"shelly_{config.outside_probe_id}"
+            return
+
+    weather_value = numeric_field(fields, "weather_temp_f")
+    if weather_value is not None:
+        fields["outside_temp_f"] = weather_value
+        fields["outside_temp_source"] = "weather_api"
 
 
 def escape_measurement(value: str) -> str:
@@ -886,8 +908,8 @@ def compute_derived_fields(
     observed_status: str,
 ) -> dict[str, Any]:
     water_f = numeric_field(fields, "pool_temp_f")
-    weather_f = numeric_field(fields, "weather_temp_f")
-    ambient_f = weather_f if weather_f is not None else numeric_field(fields, "heater_ambient_f")
+    outside_f = numeric_field(fields, "outside_temp_f")
+    ambient_f = outside_f if outside_f is not None else numeric_field(fields, "heater_ambient_f")
     mode = str(fields.get("mode") or "unknown").lower()
 
     pump_valid = bool(fields.get("pump_relay")) or (
@@ -1050,19 +1072,12 @@ def run(args: argparse.Namespace) -> int:
         f"target_temp_f={derived_config.target_temp_f if derived_config.target_temp_f is not None else 'setpoint'} "
         f"weather_enabled={str(weather_location is not None).lower()} "
         f"shelly_enabled={str(shelly_config is not None).lower()} "
-        f"pool_probe_id={shelly_config.pool_probe_id if shelly_config is not None else 'none'}"
+        f"pool_probe_id={shelly_config.pool_probe_id if shelly_config is not None else 'none'} "
+        f"outside_probe_id={shelly_config.outside_probe_id if shelly_config is not None else 'none'}"
     )
 
     while True:
         started = time.monotonic()
-
-        if weather_location is not None:
-            try:
-                if started - last_weather_fetch >= args.weather_refresh_seconds or weather_temp_f is None:
-                    weather_temp_f = fetch_weather_temp_f(*weather_location)
-                    last_weather_fetch = started
-            except Exception as exc:
-                log(f"weather_fetch_failed error={exc}")
 
         try:
             fields = poll_heater(heater)
@@ -1080,9 +1095,6 @@ def run(args: argparse.Namespace) -> int:
                 args.fault_sample_seconds,
                 args.fault_sample_attempts,
             )
-            if weather_temp_f is not None:
-                fields["weather_temp_f"] = weather_temp_f
-
             if shelly_config is not None:
                 try:
                     fields.update(shelly_temperature_fields(fetch_shelly_status(shelly_config), shelly_config))
@@ -1090,6 +1102,27 @@ def run(args: argparse.Namespace) -> int:
                     log(f"shelly_fetch_failed error={exc}")
 
             promote_pool_temperature(fields, shelly_config)
+
+            shelly_outside_key = (
+                f"shelly_probe_{shelly_config.outside_probe_id}_f"
+                if shelly_config is not None
+                else ""
+            )
+            shelly_outside_valid = (
+                shelly_config is not None
+                and is_plausible_temp_f(fields.get(shelly_outside_key), shelly_config)
+            )
+            if not shelly_outside_valid and weather_location is not None:
+                try:
+                    if started - last_weather_fetch >= args.weather_refresh_seconds or weather_temp_f is None:
+                        weather_temp_f = fetch_weather_temp_f(*weather_location)
+                        last_weather_fetch = started
+                except Exception as exc:
+                    log(f"weather_fetch_failed error={exc}")
+
+            if not shelly_outside_valid and weather_temp_f is not None:
+                fields["weather_temp_f"] = weather_temp_f
+            promote_outside_temperature(fields, shelly_config)
 
             write_fields(args, influx_config, fields, "telemetry")
             if started - last_derived_write >= derived_config.interval_seconds or args.once:
@@ -1162,6 +1195,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--iotawatt-bucket", default=None)
     parser.add_argument("--shelly-ip", default=None)
     parser.add_argument("--pool-probe-id", type=int, default=None)
+    parser.add_argument("--outside-probe-id", type=int, default=None)
     parser.add_argument("--shelly-timeout-s", type=float, default=None)
     parser.add_argument("--shelly-min-plausible-f", type=float, default=None)
     parser.add_argument("--shelly-max-plausible-f", type=float, default=None)

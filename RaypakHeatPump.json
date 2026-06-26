@@ -309,11 +309,11 @@
             "type": "influxdb",
             "uid": "efn38cqkeercwa"
           },
-          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"weather_temp_f\")\r\n  |> last()",
+          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"outside_temp_f\")\r\n  |> last()",
           "refId": "A"
         }
       ],
-      "title": "Weather Temp",
+      "title": "Outside Temp",
       "type": "stat"
     },
     {
@@ -1086,7 +1086,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "weather_temp_f"
+              "options": "outside_temp_f"
             },
             "properties": [
               {
@@ -1128,11 +1128,11 @@
             "type": "influxdb",
             "uid": "efn38cqkeercwa"
           },
-          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"pool_temp_f\" or r._field == \"setpoint_f\" or r._field == \"weather_temp_f\")\r\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\r\n  |> yield(name: \"mean\")",
+          "query": "from(bucket: \"heater\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r._measurement == \"pool_heater\")\r\n  |> filter(fn: (r) => r._field == \"pool_temp_f\" or r._field == \"setpoint_f\" or r._field == \"outside_temp_f\")\r\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\r\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
       ],
-      "title": "Pool, Setpoint, and Weather",
+      "title": "Pool, Setpoint, and Outside",
       "type": "timeseries"
     },
     {

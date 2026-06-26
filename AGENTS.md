@@ -41,7 +41,7 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
 - `local_key` retrieved via `python -m tinytuya wizard`
 - Polling daemon running, writing to InfluxDB bucket `heater`, measurement `pool_heater`
 - Grafana dashboard `RaypakHeatPump.json` live with panels: Load, Fault Status, Water Temp, Setpoint, Weather Temp, Mode, Run State, time series (water/setpoint/outside), compressor/fan load time series, fault history table, latest telemetry table
-- Weather temperature being pulled from external source and written to same measurement as `weather_temp_f` (allowing single-query overlays)
+- Outside temperature is promoted to `outside_temp_f`: Shelly probe `temperature:101` first, API weather fallback as needed. Raw API weather is still written as `weather_temp_f` when fetched.
 - Fault decoding implemented (`fault_codes` string field, empty when no faults)
 - Polling at 30s interval via the `RaypakPoller` Windows service, with adaptive fault sub-sampling at 2s × up to 5 attempts when a poll doesn't see expected fields
 - Derived metrics computed in-poller (see schema section above), avoiding fragile Flux computation
@@ -51,6 +51,7 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
 ✅ **Working as of session 3:**
 
 - **Shelly DS18B20 pool probe integration.** Hardware deployed (Shelly Plus 1 UL + Plus Add-On + one DS18B20 at `192.168.86.71`), live reading verified from `temperature:100` in pool water. The poller writes `shelly_probe_100_f`, promotes it to canonical `pool_temp_f`, and writes `pool_temp_source = "shelly_100"`. If the Shelly reading is unavailable or implausible, the poller falls back to heater `water_in_f` and marks the source as `heater_water_in` or `heater_water_in_stale`. Raypak dashboard primary pool-temperature panels read `pool_temp_f`.
+- **Shelly outside-air probe integration.** A second DS18B20 is live as `temperature:101`. The poller writes raw `shelly_probe_101_f`, promotes it to canonical `outside_temp_f`, and writes `outside_temp_source = "shelly_101"`. If the Shelly outside probe is unavailable or implausible, the poller fetches API weather and marks the source as `weather_api`. Probe `101` is not the Raypak output/return probe.
 
 ## InfluxDB schemas in play
 
@@ -69,6 +70,8 @@ Programmatically connect to a **Raypak Crosswind 65-I** pool heat pump over Wi-F
 | `water_in_f`     | int    | DP 102    | Water inlet temperature |
 | `setpoint_f`     | int    | DP 106    | Target setpoint |
 | `weather_temp_f` | float  | external  | Outside temperature (external API, not from heater) |
+| `outside_temp_f` | float  | derived  | Canonical outside temperature: Shelly outside probe first, API weather fallback |
+| `outside_temp_source` | string | derived | `shelly_101` or `weather_api` |
 | `power`          | bool   | DP 1      | Main on/off |
 | `mode`           | string | DP 105    | "warm" / "cool" / "smart" |
 | `speed_pct`      | int    | DP 104    | Compressor speed % |
@@ -328,7 +331,7 @@ heater.set_value(103, 1)             # 1=F, 0=C
 - **Tuya free tier expiration** (1 year). Local polling keeps working — only cloud re-fetch of `local_key` requires active subscription.
 - **Firmware typo `SilentMdoe`** — use verbatim.
 - **Pump-off readings are misleading.** Gate thermal calcs on `pump_relay = true`.
-- **Two ambient sources:** `weather_temp_f` (external API, always valid) and `ambient_f` (DP 124, only valid when heater running). Use external for predictions, heater's for sanity checks.
+- **Outside/ambient sources:** `outside_temp_f` is canonical for predictions and dashboard overlays. It prefers Shelly probe `101` and falls back to `weather_temp_f` from the API. `ambient_f` / `heater_ambient_f` (DP 124) is only valid when heater is running and remains a sanity-check source.
 - **Use iotaWatt for power, not `comp_amps`.** Compressor amps miss fan, controls, inverter losses. iotaWatt measures whole-unit wall draw and is already integrated.
 - **`pool_heater` measurement name collision.** Same name in two buckets (`heater` for telemetry, `iotawatt` for power). Disambiguate by bucket in queries; never assume which one.
 - **Secrets in repo.** `devices.json` (contains `local_key`), `tinytuya.json` (contains `apiKey`/`apiSecret`), `tuya-raw.json`, and `snapshot.json` are all listed in `.gitignore` and must never be committed. If any of these is shared accidentally (e.g. uploaded for review), rotate the affected secret in the Tuya IoT portal (Cloud project → Authorization Key) and re-run `python -m tinytuya wizard` to refresh `devices.json`.
@@ -365,7 +368,7 @@ heater.set_value(103, 1)             # 1=F, 0=C
    - Mode = `warm` but ambient > 90°F (questionable — waste of energy)
    - `pool_temp_source = "heater_water_in_stale"` for more than 12h continuous → Shelly is offline and pump hasn't run
 8. **Cross-dashboard linking** — add a dashboard link from RaypakHeatPump.json to Pool.json and vice versa.
-9. **Second Shelly DS18B20 probe** — when installed (heater return line via thermowell), enables direct heat-exchanger ΔT panel and real-time BTU output via `(GPM × 500 × ΔT)`. Additional poller/dashboard work will be needed to designate the return-line probe and calculate direct heat-exchanger ΔT.
+9. **Future Shelly heater-output probe** — when installed (heater return line via thermowell), enables direct heat-exchanger ΔT panel and real-time BTU output via `(GPM × 500 × ΔT)`. Probe `101` is already assigned to outside air, so additional poller/dashboard work will be needed to designate the new return-line probe and calculate direct heat-exchanger ΔT.
 
 ## Reference links
 

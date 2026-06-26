@@ -1,14 +1,14 @@
 # Shelly DS18B20 Integration
 
-Companion to `AGENTS.md` and `DASHBOARD_ENHANCEMENTS.md`. This file documents the implemented **Shelly Plus 1 + Plus Add-On + DS18B20 probe** integration and the remaining second-probe follow-up work.
+Companion to `AGENTS.md` and `DASHBOARD_ENHANCEMENTS.md`. This file documents the implemented **Shelly Plus 1 + Plus Add-On + DS18B20 probe** integration and remaining follow-up work.
 
 ## Goal
 
 Add a Shelly-based pool water temperature reading to the project, with these properties:
 
-1. **Auto-detect probes.** Start with one probe (`temperature:100`). The code must automatically pick up a second probe (`temperature:101`, etc.) when one is added, with no code change.
+1. **Auto-detect probes.** Start with one probe (`temperature:100`). The code must automatically pick up additional probes (`temperature:101`, etc.) when added, with no code change.
 2. **Reuse the existing polling daemon (`raypak_poller.py`).** The Shelly polling lives inline in the same loop that handles the heater. One process, one service, two devices.
-3. **Write to InfluxDB.** New fields land in the existing `pool_heater` measurement in the `heater` bucket — same measurement on purpose, so Grafana queries that already overlay `water_in_f` and `weather_temp_f` can pull the Shelly values without a join.
+3. **Write to InfluxDB.** New fields land in the existing `pool_heater` measurement in the `heater` bucket — same measurement on purpose, so Grafana queries can overlay heater telemetry, canonical temperatures, and raw Shelly values without a join.
 4. **Promote the better reading.** When a pool-body probe is present and plausible, canonical `pool_temp_f` is populated from the Shelly. `compute_derived_fields()` and observed COP history now read `pool_temp_f`, so every derived metric (`eta_seconds`, `observed_btu_hr`, `observed_cop`, `available_capacity_btu_hr`, `mode_sanity`, `cost_to_target_usd`) benefits without Grafana implementing sensor precedence.
 
 ## What's implemented
@@ -60,10 +60,12 @@ All new fields write to:
 | Field | Type | Source | Notes |
 |-------|------|--------|-------|
 | `shelly_probe_100_f` | float | Shelly `temperature:100.tF` | Generic per-probe field, always written when probe present |
-| `shelly_probe_101_f` | float | Shelly `temperature:101.tF` | Only written if second probe detected |
+| `shelly_probe_101_f` | float | Shelly `temperature:101.tF` | Outside-air probe currently installed |
 | `shelly_probe_102_f` | float | Shelly `temperature:102.tF` | Only written if third probe detected (Add-On supports 3 max) |
 | `pool_temp_f` | float | promoted from whichever sensor is configured/best | Single canonical "best pool temperature" field — consumed by every downstream calc |
-| `pool_temp_source` | string | `"shelly_100"` / `"shelly_101"` / `"heater_water_in"` / `"heater_water_in_stale"` | Provenance tag — which sensor produced the current `pool_temp_f` |
+| `pool_temp_source` | string | `"shelly_100"` / `"heater_water_in"` / `"heater_water_in_stale"` | Provenance tag — which sensor produced the current `pool_temp_f` |
+| `outside_temp_f` | float | promoted from Shelly outside probe or weather API | Single canonical "best outside temperature" field — consumed by dashboard and derived capacity math |
+| `outside_temp_source` | string | `"shelly_101"` / `"weather_api"` | Provenance tag — which sensor produced the current `outside_temp_f` |
 | `shelly_cpu_c` | float | Shelly `switch:0.temperature.tC` | Enclosure health — flag if it climbs past ~70°C |
 | `shelly_uptime_s` | int | Shelly `sys.uptime` | Reboot detection (drops to low value when device restarts) |
 | `shelly_rssi` | int | Shelly `wifi.rssi` | WiFi signal strength; degrades over distance / through walls |
@@ -73,6 +75,8 @@ All new fields write to:
 - **Per-probe raw fields stay forever.** `shelly_probe_100_f`, `shelly_probe_101_f`, etc. are the unprocessed truth — they always exist for the probes physically present. Dashboards can always go back to them for diagnostics.
 - **`pool_temp_f` is the canonical field for everything downstream.** `compute_derived_fields()`, time-to-target, BTU rate, COP — all consume `pool_temp_f`, not the per-probe fields directly. That keeps every panel and the existing derived-metric code using one consistent input that automatically upgrades to the Shelly when available.
 - **`pool_temp_source` makes promotion visible.** If a panel ever looks wrong, this field tells you which sensor produced the value. Also a useful Grafana annotation source (when the source flips, draw a vertical line).
+- **`outside_temp_f` is the canonical outside-air field.** It uses Shelly probe `101` first and only fetches API weather when the Shelly outside probe is missing or implausible.
+- **Probe `101` is not the Raypak output/return probe.** No Raypak-output probe is installed yet. Future heater-output or return-line work should use a separate probe ID and field.
 - **`shelly_cpu_c`, `shelly_uptime_s`, `shelly_rssi` are operational.** Same role as fault tracking on the heater — let the dashboard show device health, not just data.
 
 ## Configuration additions
@@ -91,9 +95,9 @@ RAYPAK_SHELLY_TIMEOUT_S=5
 # water_in_f for `pool_temp_f`.
 RAYPAK_POOL_PROBE_ID=100
 
-# Optional: a second probe dedicated to heater return line.
-# Used for cross-heat-exchanger ΔT calc. Leave unset until probe is installed.
-RAYPAK_HEATER_RETURN_PROBE_ID=
+# Optional: outside-air probe. Defaults to 101 when Shelly is enabled.
+# This is not the future heater return/output probe.
+RAYPAK_SHELLY_OUTSIDE_PROBE_ID=101
 
 # Optional: plausibility window for Shelly readings (Fahrenheit)
 RAYPAK_SHELLY_MIN_PLAUSIBLE_F=32     # below this = treat as bad data (ice or sensor fault)
@@ -109,7 +113,7 @@ Also add CLI args mirroring the env vars for one-off runs:
 ```
 --shelly-ip 192.168.86.71
 --pool-probe-id 100
---heater-return-probe-id 101
+--outside-probe-id 101
 ```
 
 Match the existing `--once`, `--dry-run`, `--weather-latitude` style.
@@ -453,11 +457,11 @@ The order matters — each step builds on the previous.
 18. Update `README.md` env var block — document the new `RAYPAK_SHELLY_*` variables.
 19. Cross-link from `AGENTS.md` to this file.
 
-### Phase 6: When the second probe is installed (no agent action needed)
+### Phase 6: When the heater return/output probe is installed (no agent action needed)
 
-20. User wires the second DS18B20 to any unused VCC/DATA/GND triplet on the Shelly Add-On.
-21. User sets `RAYPAK_HEATER_RETURN_PROBE_ID=101` (or whatever id firmware assigns) in `.env` and restarts the daemon.
-22. New field `shelly_probe_101_f` automatically starts being written. No code change required for the field itself.
+20. User wires the additional DS18B20 to any unused VCC/DATA/GND triplet on the Shelly Add-On.
+21. User records the firmware-assigned ID. Do not reuse `101`; that probe is outside air.
+22. New field `shelly_probe_<id>_f` automatically starts being written. No code change required for the raw field itself.
 23. At user's request, agent adds the "Heat Exchanger ΔT" panel from `DASHBOARD_ENHANCEMENTS.md` section 16.
 
 ## Testing checklist
