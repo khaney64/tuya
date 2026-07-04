@@ -1494,27 +1494,39 @@
     "list": [
       {
         "current": {
-          "selected": false,
+          "selected": true,
           "text": "10100",
           "value": "10100"
         },
-        "hide": 0,
         "label": "Pool gallons",
         "name": "pool_gallons",
+        "options": [
+          {
+            "selected": true,
+            "text": "10100",
+            "value": "10100"
+          }
+        ],
         "query": "10100",
-        "type": "constant"
+        "type": "textbox"
       },
       {
         "current": {
-          "selected": false,
+          "selected": true,
           "text": "0.15828",
           "value": "0.15828"
         },
-        "hide": 0,
-        "label": "kWh price",
+        "label": "$/kWh",
         "name": "kWhPrice",
+        "options": [
+          {
+            "selected": true,
+            "text": "0.15828",
+            "value": "0.15828"
+          }
+        ],
         "query": "0.15828",
-        "type": "constant"
+        "type": "textbox"
       }
     ]
   },
