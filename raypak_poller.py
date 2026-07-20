@@ -127,6 +127,7 @@ FAULT1_LABELS = [
 FAULT2_LABELS = ["F8", "F9", "FB", "FA"]
 FAULT_FIELD_NAMES = ("fault1_raw", "fault2_raw", "fault_active", "fault_codes")
 MIN_FULL_TELEMETRY_FIELDS = 10
+PARTIAL_TELEMETRY_RECONNECT_POLLS = 3
 
 
 @dataclass(frozen=True)
@@ -1039,6 +1040,8 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--fault-sample-seconds must be at least 1 second")
     if args.fault_sample_attempts < 0:
         raise ValueError("--fault-sample-attempts must be 0 or greater")
+    if args.partial_reconnect_polls < 1:
+        raise ValueError("--partial-reconnect-polls must be at least 1")
 
     base_dir = Path(__file__).resolve().parent
     device_file = Path(args.device_file)
@@ -1061,12 +1064,14 @@ def run(args: argparse.Namespace) -> int:
     weather_temp_f: float | None = None
     last_weather_fetch = 0.0
     last_derived_write = 0.0
+    consecutive_partial_polls = 0
 
     log(
         "starting poller "
         f"device_ip={device_config.address} interval={args.interval_seconds}s "
         f"fault_sample={args.fault_sample_seconds}s "
         f"fault_attempts={args.fault_sample_attempts} "
+        f"partial_reconnect_polls={args.partial_reconnect_polls} "
         f"persistent={str(effective_persistent).lower()} "
         f"pool_gallons={derived_config.pool_gallons:g} "
         f"target_temp_f={derived_config.target_temp_f if derived_config.target_temp_f is not None else 'setpoint'} "
@@ -1082,12 +1087,33 @@ def run(args: argparse.Namespace) -> int:
         try:
             fields = poll_heater(heater)
             if not is_full_telemetry(fields):
-                log(f"poll_skipped reason=partial_telemetry fields={len(fields)}")
+                consecutive_partial_polls += 1
+                field_names = ",".join(sorted(fields)) or "none"
+                log(
+                    "poll_skipped reason=partial_telemetry "
+                    f"fields={len(fields)} names={field_names} "
+                    f"consecutive={consecutive_partial_polls}"
+                )
+                if consecutive_partial_polls >= args.partial_reconnect_polls:
+                    try:
+                        heater = create_heater(device_config, persistent=effective_persistent)
+                        log(
+                            "heater_reconnected reason=partial_telemetry "
+                            f"consecutive={consecutive_partial_polls}"
+                        )
+                        consecutive_partial_polls = 0
+                    except Exception as reconnect_exc:
+                        log(
+                            "heater_reconnect_failed reason=partial_telemetry "
+                            f"error={reconnect_exc}"
+                        )
                 if args.once:
                     return 0
                 elapsed = time.monotonic() - started
                 time.sleep(max(0.0, args.interval_seconds - elapsed))
                 continue
+
+            consecutive_partial_polls = 0
 
             merge_fault_sample(
                 heater,
@@ -1183,6 +1209,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--interval-seconds", type=float, default=POLL_INTERVAL_SECONDS)
     parser.add_argument("--fault-sample-seconds", type=float, default=FAULT_SAMPLE_SECONDS)
     parser.add_argument("--fault-sample-attempts", type=int, default=FAULT_SAMPLE_ATTEMPTS)
+    parser.add_argument(
+        "--partial-reconnect-polls",
+        type=int,
+        default=PARTIAL_TELEMETRY_RECONNECT_POLLS,
+        help="recreate the Tuya client after this many consecutive partial polls",
+    )
     parser.add_argument("--weather-refresh-seconds", type=float, default=WEATHER_REFRESH_SECONDS)
     parser.add_argument("--weather-latitude", type=float, default=None)
     parser.add_argument("--weather-longitude", type=float, default=None)
